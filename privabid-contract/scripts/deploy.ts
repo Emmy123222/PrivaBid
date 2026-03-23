@@ -44,7 +44,7 @@ const MODE_NAMES: Record<number, string> = {
 async function main() {
   console.log("\n═══════════════════════════════════════════════════════════");
   console.log("  PrivaBid — Multi-Mode FHE Auction Platform");
-  console.log("  Deployment Script — Fhenix Buildathon 2025");
+  console.log("  Deployment Script");
   console.log("═══════════════════════════════════════════════════════════\n");
 
   const [deployer]   = await ethers.getSigners();
