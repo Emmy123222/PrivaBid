@@ -1,7 +1,7 @@
-# How FHE Powers PrivaBid
+# How FHE Powers PrivaBid's Four Auction Modes
 ### A Plain-English Explainer
 
-This document explains Fully Homomorphic Encryption (FHE) and why it's the only technology that can power a truly private on-chain auction — written for readers without a cryptography background.
+This document explains Fully Homomorphic Encryption (FHE) and how it powers each of PrivaBid's four auction types — written for readers without a cryptography background.
 
 ---
 
@@ -9,170 +9,257 @@ This document explains Fully Homomorphic Encryption (FHE) and why it's the only 
 
 Imagine you have a **magic safe**. You can put two sealed envelopes inside — each containing a secret number. You close the safe and press a button labeled "COMPARE."
 
-The safe tells you: "The left envelope wins" — without ever opening either envelope.
+The safe tells you: "The left envelope has the bigger number" — without ever opening either envelope.
 
 Nobody sees the numbers. The safe did the comparison in the dark. Only the result came out.
 
 **That is Fully Homomorphic Encryption.**
 
+Now imagine the safe can also:
+- Tell you which of two envelopes has the **smaller** number (for procurement)
+- Track the **two biggest** numbers across hundreds of envelopes (for Vickrey auctions)
+- Check if a descending counter has reached someone's **secret threshold** (for Dutch auctions)
+
+All without opening any envelope. That is what PrivaBid does across its four auction modes.
+
 ---
 
 ## What "Homomorphic" Means
 
-"Homomorphic" means: *the same structure is preserved across transformations.*
+"Homomorphic" means: the same structure is preserved across transformations.
 
 In practical terms: mathematical operations on encrypted data produce encrypted results that, when decrypted, match what you'd get if you had operated on the original data.
 
 ```
 Normal math:
-  5 + 3 = 8
+  5,000 + 3,000 = 8,000
 
 FHE math:
-  encrypt(5) ⊕ encrypt(3) = encrypt(8)
-  decrypt(encrypt(8)) = 8  ✓
+  encrypt(5,000) ⊕ encrypt(3,000) = encrypt(8,000)
+  decrypt(encrypt(8,000)) = 8,000  ✓
 ```
 
-The operation happened on the encrypted values. The result is also encrypted.
-When you decrypt it, you get the correct answer.
-
-"Fully" homomorphic means this works for **any** operation — addition, multiplication, comparison, selection — not just a limited set.
+"Fully" homomorphic means this works for **any** operation — comparison, maximum, minimum, conditional selection — not just a limited set.
 
 ---
 
-## Why This Matters for Auctions
+## The Four Core FHE Operations in PrivaBid
 
-### The Problem With Normal Encryption
+Before explaining each auction mode, here are the four FHE building blocks used across all of them:
 
-Normal encryption is like a box with a lock. You can lock the box (encrypt) and unlock the box (decrypt). But you can't **do anything with what's inside** while it's locked.
+### FHE.gt(a, b) and FHE.lt(a, b)
+*"Without opening either box, tell me: is box A bigger than box B?"*
 
-On a blockchain, this means:
-- You can store an encrypted bid ✓
-- But to compare it with another bid, you must decrypt first ✗
-- And decryption puts the value in plaintext — visible to everyone ✗
+Returns an **encrypted yes/no** — not a regular true/false. Even the answer is sealed. The contract cannot read it. It can only pass it to the next operation.
 
-### What FHE Changes
+### FHE.max(a, b) and FHE.min(a, b)
+*"Without opening either box, give me a new sealed box containing the larger (or smaller) of the two."*
 
-FHE is like a box where you can **manipulate the contents from outside without unlocking it**.
+The result is a new sealed box. Nobody knows which value it contains.
 
-You can:
-- Put two locked boxes in the machine and ask "which has the bigger number?" → get back a locked answer
-- Put two locked boxes in and ask "return the bigger one" → get back a locked box with the larger value inside
-- Ask "if box A > box B, give me box C, otherwise give me box D" → get back the right box, locked
+### FHE.select(condition, a, b)
+*"Given a sealed yes/no answer: if it's yes, give me box A. If it's no, give me box B. Don't tell me which you chose."*
 
-In PrivaBid:
-- Each bid is a locked box (encrypted with `FHE.asEuint64`)
-- `FHE.gt()` asks: which locked box has the bigger number? Returns a locked "yes/no"
-- `FHE.max()` asks: return a locked box with the larger of these two values
-- `FHE.select()` asks: given a locked "yes/no" answer, return this locked box or that one
+An encrypted conditional. No branch is visible. This is how PrivaBid updates the current winner without anyone knowing who is winning.
 
-At every step, nothing is unlocked. Everything stays encrypted.
+### FHE.allowPublic(handle)
+*"The Threshold Network is now allowed to open this specific box — but only this one."*
+
+Called only on the winning box after the auction closes. Every losing box is never granted this permission. Losing bids are permanently sealed.
 
 ---
 
-## The Four FHE Operations in PrivaBid
+## Mode 1 — First-Price Sealed Bid
 
-When you call `bid(5000)`, here's what happens in plain language:
+**"Highest bid wins, pays their own amount."**
 
-### Step 1: Lock Your Bid
+### How FHE is used:
+
+When you call `bid(5000)`:
+
 ```
-FHE.asEuint64(5000)
-```
-*"Take the number 5000 and lock it in a box. Nobody can open this box. Give me the locked box."*
+Step 1: Lock your bid
+  FHE.asEuint64(5000) → sealed box containing 5,000
 
-From this point, nobody — not the contract, not observers, not block validators — can see your bid amount.
+Step 2: Compare without opening
+  FHE.gt(your box, current highest box) → sealed YES or NO
 
-### Step 2: Compare Without Opening
-```
-FHE.gt(yourLockedBid, currentHighestLockedBid)
-```
-*"Without opening either box, tell me: is my box bigger than the current highest box?"*
+Step 3: Update the highest bid
+  FHE.max(your box, current highest box) → new sealed box with the larger value
 
-The answer comes back as... another locked box. An encrypted yes/no. The contract cannot open this box either. It can only pass it to the next operation.
-
-### Step 3: Update the Highest Bid
+Step 4: Update the winner identity
+  FHE.select(sealed YES/NO, your address box, current winner box)
+  → new sealed box with whoever is winning
 ```
-FHE.max(yourLockedBid, currentHighestLockedBid)
-```
-*"Without opening either box, give me a new box containing whichever of these two has the larger number inside."*
 
-The result is a new locked box. Nobody knows if it contains 5000 (your bid) or the previous highest.
+Nothing is opened. The contract does not know if you are winning or losing. Nobody does.
 
-### Step 4: Update the Winner's Identity
-```
-FHE.select(encryptedYesNo, yourLockedAddress, currentLeaderLockedAddress)
-```
-*"Given the locked yes/no answer from Step 2: if it's yes, give me a locked box with my address in it. If it's no, give me the box with the current leader's address. Don't tell me which one you returned."*
-
-The result: a locked box with the winner's address. Neither the contract nor anyone watching knows if the winner changed.
+### Why it beats commit-reveal:
+In commit-reveal, all bids are revealed at the end. Losers' amounts are on-chain forever. In PrivaBid Mode 1, `FHE.allowPublic()` is called only on the winning bid. All losing bids are sealed permanently.
 
 ---
 
-## Why Losing Bids Are Never Revealed
+## Mode 2 — Vickrey Auction (Second-Price)
 
-This is the critical guarantee that makes PrivaBid different from everything else.
+**"Highest bid wins, but pays the second-highest amount."**
 
-When the auction ends, the auctioneer calls `closeBidding()`. This calls:
+This is the fairest auction format — it incentivises everyone to bid their true value. Used in Google Ads, government spectrum auctions, and high-stakes corporate procurement.
+
+### Why this is harder with FHE:
+
+Mode 1 tracks one encrypted value. Vickrey must track **two encrypted values simultaneously** — the highest bid and the second-highest bid — updating both on every incoming bid, without decrypting either.
+
+### How FHE handles it:
+
+The magic is a **nested** `FHE.select` — a conditional inside a conditional, all in encrypted space:
+
 ```
-FHE.allowPublic(highestBid)
-FHE.allowPublic(highestBidder)
+Three cases when a new bid arrives:
+  If new bid is highest:
+    → second-highest = old highest (bump it down)
+    → highest = new bid
+  If new bid is second-best:
+    → second-highest = new bid
+    → highest unchanged
+  If new bid is lower than both:
+    → nothing changes
+
+The contract evaluates all three cases simultaneously
+using nested encrypted conditionals — without ever
+knowing which case applies.
 ```
 
-This is saying: *"The Threshold Network is allowed to open these two specific locked boxes."*
+```
+isHighest = FHE.gt(new bid, current highest)   → sealed YES/NO
+isSecond  = FHE.gt(new bid, current second)    → sealed YES/NO
 
-Only these two. Your losing bid was never granted this permission.
+secondHighest = FHE.select(
+  isHighest,              ← "did new bid beat the top?"
+  current highest,        ← if yes: old top becomes new second
+  FHE.select(
+    isSecond,             ← "did new bid beat the second?"
+    new bid,              ← if yes: new bid is new second
+    current second        ← if no: second unchanged
+  )
+)
+```
 
-It exists somewhere in the history of locked boxes that passed through `FHE.max()` and `FHE.select()` operations — but it was never marked as openable. The key to open it was never issued to anyone.
+At the end, the winner pays `secondHighestBid` — proven by its own separate Threshold Network signature. You can verify exactly what the winner paid and confirm it is correct.
 
-**Even if someone had unlimited computational resources, they cannot open a box that has never been given an opening key.**
-
----
-
-## The Threshold Network: Decentralized Key Holding
-
-The "key" to open FHE-encrypted values is not held by any single party. It is split among a network of nodes using **Multi-Party Computation**.
-
-Imagine 100 people, each holding one piece of a puzzle. You need at least 51 pieces to reconstruct the full puzzle. Any 51 people can cooperate and reconstruct it. But 50 or fewer people cannot reconstruct anything useful.
-
-The Threshold Network works the same way:
-- The decryption key is split into many shards
-- Each shard is held by a different node
-- A threshold number of nodes must cooperate to decrypt
-- No single node can decrypt alone
-- The nodes cooperate, produce the decrypted value, and sign it to prove correctness
-
-When `revealWinner()` is called on-chain, `FHE.publishDecryptResult()` verifies this signature. If the signature doesn't match, the transaction reverts. The result is not just claimed — it's proven.
+### Why this matters:
+A Vickrey auction on a transparent chain is gameable — bidders can see the second-highest bid and bid exactly one unit above it. PrivaBid's Vickrey mode keeps both values sealed until reveal. True Vickrey properties, for the first time, on-chain.
 
 ---
 
-## What This Enables That Nothing Else Can
+## Mode 3 — Dutch Auction with Encrypted Thresholds
 
-| Feature | Traditional Auction | Commit-Reveal | Off-Chain Sealed Bid | PrivaBid (FHE) |
-|---|---|---|---|---|
-| Bids hidden during auction | ✗ | ✓ | ✓ | ✓ |
-| Losing bids hidden after auction | ✗ | ✗ | Sometimes | ✓ Always |
-| No trusted operator needed | N/A | ✓ | ✗ | ✓ |
-| Winner proven cryptographically | ✗ | ✓ | ✗ | ✓ |
-| Works on public blockchain | ✓ | ✓ | ✗ | ✓ |
-| Compliant for institutions | ✗ | ✗ | ✓ | ✓ |
+**"Price descends from high to low. First bidder whose secret floor is met wins."**
 
-PrivaBid is the only architecture that satisfies all six requirements simultaneously.
+### The traditional problem:
+
+In a normal Dutch auction, the price ticks down over time. The first person to "accept" wins. On a transparent chain, bidders can watch each other's wallets and time their acceptance strategically — defeating the purpose.
+
+### PrivaBid's FHE solution:
+
+Before the auction starts, bidders submit an **encrypted threshold** — the lowest price they are willing to accept. The contract holds all thresholds as sealed ciphertexts.
+
+As the price descends, the contract checks:
+
+```
+FHE.lte(currentPrice, encryptedThreshold)
+→ sealed YES or NO
+```
+
+If YES (in encrypted space): this bidder wins automatically. Nobody had to reveal their floor. Nobody could watch and react.
+
+### Why this is new:
+
+A blind Dutch auction — where no bidder can see others' acceptance thresholds — simply cannot exist on a transparent chain. PrivaBid is the first protocol to make it possible.
+
+The bidder sets their floor once, submits it encrypted, and walks away. If the price reaches their floor before anyone else's, they win. No timing games. No watching the blockchain.
 
 ---
 
-## Summary
+## Mode 4 — Reverse Auction / Procurement
 
-FHE lets a smart contract:
-1. **Store** bid amounts without anyone being able to read them
-2. **Compare** bids without decrypting either value
-3. **Find the maximum** without knowing what the maximum is
-4. **Update the winner** without knowing who is currently winning
-5. **Reveal only the winner** — with cryptographic proof — while permanently sealing all other bids
+**"Sellers compete by offering the lowest price. Buyer picks the winner."**
 
-This isn't a workaround or a clever trick. It's a fundamental cryptographic capability that makes a new category of application possible.
+This is how most real-world procurement works — companies submit bids to win a contract, and the buyer picks the lowest responsible offer.
 
-PrivaBid is the first application of this capability to the auction problem — and it's built on Fhenix, the only production FHE infrastructure for EVM smart contracts.
+### The transparent chain problem:
+
+If a government agency runs procurement on a transparent chain, every vendor can see every competitor's price in real-time. They undercut by one cent. Strategic gaming replaces honest competitive pricing.
+
+### How PrivaBid flips Mode 1:
+
+Mode 4 is Mode 1 with one conceptual change: instead of finding the maximum, find the **minimum**. `FHE.max` becomes `FHE.min`. `FHE.gt` becomes `FHE.lt`.
+
+```
+Mode 1 (buyer competition):
+  isHigher = FHE.gt(new bid, current highest)
+  highest  = FHE.max(new bid, current highest)
+
+Mode 4 (seller competition):
+  isLower  = FHE.lt(new ask, current lowest)
+  lowest   = FHE.min(new ask, current lowest)
+```
+
+The ACL model, Threshold Network reveal, and privacy guarantees are identical. Only the direction of competition changes.
+
+### Why procurement specifically needs this:
+
+Government procurement by law requires sealed bids in most jurisdictions. The law exists because transparent procurement enables collusion and bid-rigging. But "sealed" today means sending PDFs to a government email address — an offline system with no verifiable audit trail.
+
+PrivaBid's reverse auction gives procurement:
+- Cryptographically sealed bids (not just PDFs)
+- Publicly verifiable outcome (on-chain with Threshold Network proof)
+- No trusted operator to manipulate results
+- Permanent record of all participation (addresses public, amounts sealed)
 
 ---
 
-*For the technical implementation: [`ARCHITECTURE.md`](ARCHITECTURE.md)*
-*For the smart contract: [`contracts/PrivaBid.sol`](contracts/PrivaBid.sol)*
+## The Permanent Seal — PrivaBid's Core Guarantee
+
+Across all four modes, the same property holds:
+
+**Losing bids, asks, and thresholds are never decrypted. Ever.**
+
+After `closeBidding()`, `FHE.allowPublic()` is called only on the winning values. All other ciphertexts exist as orphaned encrypted handles in the Fhenix CoFHE registry. They were never granted a decryption key.
+
+Even if every node in the Threshold Network was compromised, those losing bids could not be decrypted — because they were never marked as decryptable. The permission was never issued. The math makes it impossible.
+
+This is what "privacy-by-design" means. Not a UI setting. Not a legal promise. A cryptographic impossibility.
+
+---
+
+## The Threshold Network: Who Holds the Key?
+
+Across all modes, winner revelation works the same way:
+
+1. The auctioneer calls `closeBidding()` — `FHE.allowPublic()` authorises decryption of the winning handle only
+2. Anyone calls `client.decryptForTx(handle)` off-chain
+3. The Threshold Network — multiple independent nodes each holding a key shard — cooperate to decrypt and jointly sign the result
+4. The signature is submitted on-chain via `FHE.publishDecryptResult()`
+5. The contract verifies the signature. If invalid: **transaction reverts**
+6. If valid: winner stored on-chain, trustlessly proven
+
+No single party can fake the result. No single party can decrypt early. The reveal is controlled by cryptography, not by trust.
+
+---
+
+## Summary: What Each Mode Uses FHE For
+
+| Mode | Core FHE Operations | What's Sealed | What's Revealed |
+|---|---|---|---|
+| First-Price | `FHE.gt`, `FHE.max`, `FHE.select` | All bid amounts | Winning bid + winner |
+| Vickrey | All of above + nested `FHE.select` for second-highest | All bids | Winning bid + payment amount + winner |
+| Dutch | `FHE.lte`, threshold comparison per block | All acceptance thresholds | Winner's threshold at match |
+| Reverse | `FHE.lt`, `FHE.min`, `FHE.select` | All ask prices | Lowest ask + winning seller |
+
+In every mode: losing values are never decryptable. Privacy is guaranteed by the FHE type system, not by promises.
+
+---
+
+*For the technical implementation details: [`ARCHITECTURE.md`](ARCHITECTURE.md)*
+*For the smart contracts: [`contracts/`](contracts/)*
+*For the project overview: [`README.md`](README.md)*
