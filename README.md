@@ -1,12 +1,15 @@
 # PrivaBid 🔒
-### Sealed-Bid Auction Protocol on Fhenix FHE
+### The FHE Auction Platform on Fhenix
 
 > *"Front-runners can't front-run what they can't see."*
 
-**PrivaBid** is a sealed-bid auction protocol where every bid is cryptographically encrypted on-chain from submission to reveal. Built natively on [Fhenix](https://fhenix.io) Fully Homomorphic Encryption — not retrofitted with commit-reveal hacks or trusted intermediaries.
+**PrivaBid** is a multi-mode encrypted auction platform where every bid, ask, and threshold is cryptographically sealed on-chain from submission to reveal. Built natively on [Fhenix](https://fhenix.io) Fully Homomorphic Encryption — not retrofitted with commit-reveal hacks or trusted intermediaries.
+
+PrivaBid is not a single auction contract. It is a **platform of auction primitives** — each one unlocking a market that cannot exist on transparent rails.
 
 [![Built on Fhenix](https://img.shields.io/badge/Built%20on-Fhenix%20FHE-00FF94?style=flat-square)](https://fhenix.io)
 [![Wave 1](https://img.shields.io/badge/Buildathon-Wave%201-blue?style=flat-square)](https://akindo.io)
+[![Network](https://img.shields.io/badge/Network-Arbitrum%20Sepolia-purple?style=flat-square)](https://sepolia.arbiscan.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 ---
@@ -17,14 +20,15 @@
 2. [Why Existing Solutions Fail](#2-why-existing-solutions-fail)
 3. [What PrivaBid Does](#3-what-privabid-does)
 4. [Why FHE is the Only Real Solution](#4-why-fhe-is-the-only-real-solution)
-5. [Architecture & Flow](#5-architecture--flow)
-6. [FHE Primitives Used](#6-fhe-primitives-used)
-7. [Smart Contract Overview](#7-smart-contract-overview)
-8. [Use Cases](#8-use-cases)
-9. [Long-Term Vision](#9-long-term-vision)
-10. [Roadmap](#10-roadmap)
-11. [Technical Stack](#11-technical-stack)
-12. [Getting Started](#12-getting-started)
+5. [The Four Auction Modes](#5-the-four-auction-modes)
+6. [Architecture & Flow](#6-architecture--flow)
+7. [FHE Primitives Used](#7-fhe-primitives-used)
+8. [Smart Contract Overview](#8-smart-contract-overview)
+9. [Use Cases](#9-use-cases)
+10. [Long-Term Vision](#10-long-term-vision)
+11. [Roadmap](#11-roadmap)
+12. [Technical Stack](#12-technical-stack)
+13. [Getting Started](#13-getting-started)
 
 ---
 
@@ -34,22 +38,20 @@ Public blockchains made transparency the default. That transparency enables trus
 
 **On-chain auctions are broken by design.**
 
-The moment a bidder submits a transaction, their bid amount is visible to the entire network — before it's even confirmed. This creates three compounding vulnerabilities:
+The moment a bidder submits a transaction, their bid amount is visible to the entire network — before it is even confirmed. This creates three compounding vulnerabilities:
 
 ### MEV / Front-Running
-Automated bots monitor the Ethereum mempool in real-time. When they detect a bid of `5,000 USDC`, they immediately submit a bid of `5,001 USDC` with a higher gas fee, ensuring their transaction is mined first.
-
-The original bidder loses — not because someone valued the item more, but because a bot had read access to their transaction.
+Automated bots monitor the Ethereum mempool in real-time. When they detect a bid of `5,000 USDC`, they immediately submit a bid of `5,001 USDC` with a higher gas fee, ensuring their transaction is mined first. The original bidder loses — not because someone valued the item more, but because a bot had read access to their transaction.
 
 > **$500M+** is extracted from DeFi users annually through MEV. 75% of those losses hit trades under $20K — retail users, not whales.
 
 ### Bid Sniping
-Because the current highest bid is always visible, rational bidders wait until the last possible moment and place a minimal outbid. This collapses true price discovery: the final auction price reflects the second-highest bidder's **patience**, not the item's real market value.
+Because the current highest bid is always visible, rational bidders wait until the last possible moment and place a minimal outbid. This collapses true price discovery — the final auction price reflects the second-highest bidder's patience, not the item's real market value.
 
 ### Strategic Collusion
-In institutional settings — procurement, RWA liquidations, corporate M&A — knowing a competitor's bid is valuable intelligence. A company evaluating on-chain infrastructure for procurement cannot use transparent rails. Compliance won't allow it.
+In institutional settings — procurement, RWA liquidations, corporate M&A — knowing a competitor's bid is valuable intelligence. A company evaluating on-chain infrastructure for procurement cannot use transparent rails. Compliance will not allow it.
 
-> This is why institutions aren't using on-chain auctions. Not because they don't want to. Because they **can't**.
+> This is why institutions are not using on-chain auctions. Not because they do not want to. Because they **cannot**.
 
 ---
 
@@ -62,7 +64,7 @@ Bidders hash their bid + a secret in Phase 1, reveal in Phase 2.
 
 **Why it fails:**
 - The reveal phase exposes **all bids publicly** — losers' amounts become permanently visible on-chain
-- A committed hash is still gameable: adversaries can brute-force common bid amounts
+- A committed hash is still gameable — adversaries can brute-force common bid amounts
 - Requires two separate transactions (double the gas, double the UX friction)
 - Bids can be front-run **between** the commit and reveal phases
 
@@ -78,29 +80,26 @@ Bids go to a centralized server; settlement happens on-chain.
 Zero-knowledge proofs can verify that a bid meets a condition without revealing the value.
 
 **Why it fails:**
-- ZK proofs **verify statements** about values — they don't enable **computation across** multiple encrypted values
-- You can prove "my bid is above the reserve" but you cannot compute "which of these 50 encrypted bids is the highest" without building custom circuits for every possible comparison combination
-- Not practical at auction scale
+- ZK proofs verify statements about values — they do not enable computation across multiple encrypted values
+- You can prove "my bid is above the reserve" but you cannot compute "which of these 50 encrypted bids is the highest" without custom circuits for every comparison — not practical at scale
 
 ### The Real Issue
-All of these approaches share a fundamental flaw: **they add privacy as a layer on top of a transparent system**. The underlying architecture is still transparent, and every "privacy" layer is just an obstacle that sophisticated attackers eventually work around.
-
-PrivaBid takes the opposite approach: **privacy is baked into the architecture from day one.**
+All of these approaches share a fundamental flaw: they add privacy as a layer on top of a transparent system. PrivaBid takes the opposite approach — **privacy is baked into the architecture from day one.**
 
 ---
 
 ## 3. What PrivaBid Does
 
-PrivaBid is a smart contract that runs a sealed-bid auction where:
+PrivaBid is a platform of FHE-native auction contracts. Across all modes, the same guarantee holds:
 
 | What happens | What observers see |
 |---|---|
-| Bidder submits `bid(5000)` | Bidder's wallet address, timestamp |
+| Bidder submits `bid(amount)` | Bidder's wallet address, timestamp |
 | Contract encrypts and stores bid | An opaque ciphertext handle |
 | Contract compares bids | That a comparison occurred |
-| Contract updates highest bidder | That state changed |
+| Contract updates winner | That state changed |
 | Auction closes | That the auction is closed |
-| Threshold Network decrypts winner | The winner's address and bid amount |
+| Threshold Network decrypts winner | The winner's address and winning amount |
 | All losing bids | **Nothing. Permanently sealed.** |
 
 **The key guarantee:** A bidder cannot adjust their strategy based on what others bid — because they cannot see what others bid. True sealed-bid mechanics, enforced by cryptography, not by rules.
@@ -122,297 +121,385 @@ decrypt(FHE_encrypt(8,000))  →  8,000  ✓
 
 This is the only cryptographic primitive that allows a smart contract to:
 - **Compare** two bid values without knowing what either value is
-- **Find the maximum** without decrypting either value
+- **Find the maximum or minimum** without decrypting either value
 - **Conditionally update** the winner without branching on plaintext
+- **Track multiple encrypted values** simultaneously (e.g. first and second highest bids)
 - **Reveal the result** with a cryptographic proof of correctness
 
-No other technology — not ZK, not MPC alone, not commit-reveal — gives you all four properties simultaneously on a general-purpose smart contract platform.
+No other technology — not ZK, not MPC alone, not commit-reveal — gives you all five properties simultaneously on a general-purpose smart contract platform.
 
-Fhenix implements FHE as a **co-processor (CoFHE)** for EVM-compatible chains. Solidity contracts call `FHE.gt()`, `FHE.max()`, `FHE.select()` just like calling any other function — the encrypted computation happens off-chain on the CoFHE coprocessor and results are returned on-chain.
+Fhenix implements FHE as a **co-processor (CoFHE)** for EVM-compatible chains. Solidity contracts call `FHE.gt()`, `FHE.max()`, `FHE.select()` just like any other function — encrypted computation happens off-chain on the CoFHE coprocessor and results are returned on-chain.
 
 ---
 
-## 5. Architecture & Flow
+## 5. The Four Auction Modes
+
+PrivaBid is expanding beyond a single auction type. Each mode uses FHE differently and targets a different market.
+
+---
+
+### Mode 1 — Sealed-Bid First-Price Auction ✅ Live
+**"Highest bid wins, pays their own amount."**
+
+The classic sealed-bid format. Bids are encrypted on submission. The contract tracks the highest encrypted bid using `FHE.gt()` and `FHE.max()`. Winner pays exactly what they bid.
+
+**FHE operations:** `FHE.asEuint64`, `FHE.gt`, `FHE.max`, `FHE.select`
+**Target markets:** NFT auctions, token launches, one-off asset sales
+
+---
+
+### Mode 2 — Vickrey Auction (Second-Price) 🔨 Wave 2
+**"Highest bid wins, but pays the second-highest amount."**
+
+The Vickrey auction is mathematically proven to be the fairest auction format — it incentivises every bidder to bid their true value. Used in Google Ads, government spectrum auctions, and corporate procurement.
+
+Building this on FHE requires tracking **two encrypted values simultaneously** — `highestBid` and `secondHighestBid` — and updating both on every incoming bid without ever decrypting either. This is a meaningfully more complex FHE operation than Mode 1.
+
+```solidity
+euint64 private highestBid;
+euint64 private secondHighestBid;  // winner pays this amount
+eaddress private highestBidder;
+
+function bid(uint64 amount) external {
+    euint64 enc = FHE.asEuint64(amount);
+
+    ebool isHighest = FHE.gt(enc, highestBid);
+    ebool isSecond  = FHE.gt(enc, secondHighestBid);
+
+    // Update second highest BEFORE overwriting highest
+    // If new bid is highest: second = old highest
+    // If new bid is second: second = new bid
+    // Otherwise: second unchanged
+    secondHighestBid = FHE.select(isHighest, highestBid,
+                         FHE.select(isSecond, enc, secondHighestBid));
+
+    highestBid    = FHE.max(enc, highestBid);
+    highestBidder = FHE.select(isHighest,
+                     FHE.asEaddress(msg.sender), highestBidder);
+
+    FHE.allowThis(highestBid);
+    FHE.allowThis(secondHighestBid);
+    FHE.allowThis(highestBidder);
+}
+```
+
+At reveal, the winner pays `secondHighestBid` — proven by two separate Threshold Network decryptions.
+
+**FHE operations:** All of Mode 1 plus dual-value tracking with nested `FHE.select`
+**Target markets:** Government procurement, spectrum auctions, institutional asset sales
+
+---
+
+### Mode 3 — Dutch Auction with Encrypted Thresholds 🔨 Wave 3
+**"Price descends until a bidder's secret threshold is met."**
+
+In a traditional Dutch auction, the price starts high and drops over time. The first bidder to accept wins. On a transparent chain this is gameable — you can see when others are close to accepting.
+
+PrivaBid's Dutch auction adds an FHE twist: bidders submit an **encrypted threshold** — the lowest price they are willing to pay. The contract checks `FHE.lte(currentPrice, encryptedThreshold)` on each block to find the first match — without revealing any bidder's threshold until they win.
+
+This enables true blind Dutch auctions where no bidder can time their acceptance based on observing others.
+
+**FHE operations:** `FHE.lte`, `FHE.select`, time-based price curve logic
+**Target markets:** Token distributions, declining-price liquidations, time-sensitive asset sales
+
+---
+
+### Mode 4 — Reverse Auction / Procurement 🔨 Wave 4
+**"Sellers compete by submitting encrypted asks. Buyer picks the lowest."**
+
+A reverse auction flips the model: instead of buyers competing for an item, sellers compete to offer the lowest price for a contract or service. This is how most corporate and government procurement works.
+
+On transparent chains, vendors can see each other's prices and undercut by the minimum amount. PrivaBid's reverse auction uses `FHE.min()` to track the lowest encrypted ask — no vendor ever sees a competitor's price.
+
+```solidity
+euint64  private lowestAsk;
+eaddress private lowestSeller;
+
+function submitAsk(uint64 price) external {
+    euint64 enc     = FHE.asEuint64(price);
+    ebool   isLower = FHE.lt(enc, lowestAsk);   // FHE.lt instead of gt
+    lowestAsk    = FHE.min(enc, lowestAsk);      // FHE.min instead of max
+    lowestSeller = FHE.select(isLower,
+                     FHE.asEaddress(msg.sender), lowestSeller);
+    FHE.allowThis(lowestAsk);
+    FHE.allowThis(lowestSeller);
+}
+```
+
+**FHE operations:** `FHE.lt`, `FHE.min`, `FHE.select`
+**Target markets:** Corporate procurement, freelance platform bidding, DAO service contracts, government tenders
+
+---
+
+### Bonus Feature — Encrypted Reserve Price (All Modes)
+In all modes, the reserve price can optionally be encrypted. The auctioneer sets a sealed floor — bidders cannot see the minimum, cannot game it, and the auction fails silently if no bid clears the reserve without revealing what the reserve was.
+
+```solidity
+euint64 private encryptedReserve;
+
+// At reveal — verify winner clears reserve in FHE space
+ebool meetsReserve = FHE.gte(highestBid, encryptedReserve);
+```
+
+---
+
+## 6. Architecture & Flow
 
 ### System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         PrivaBid Protocol                        │
-│                                                                   │
-│  ┌──────────┐    bid(amount)     ┌─────────────────────────────┐ │
-│  │  Bidder  │ ─────────────────► │       PrivaBid.sol          │ │
-│  │  Wallet  │                    │                             │ │
-│  └──────────┘                    │  euint64  highestBid        │ │
-│                                  │  eaddress highestBidder     │ │
-│  ┌──────────┐   closeBidding()   │                             │ │
-│  │Auctioneer│ ─────────────────► │  FHE.gt()   ← comparison   │ │
-│  └──────────┘                    │  FHE.max()  ← update bid   │ │
-│                                  │  FHE.select() ← update who │ │
-│                                  └──────────┬──────────────────┘ │
-│                                             │                     │
-│                                   FHE operations submitted        │
-│                                             │                     │
-│                                  ┌──────────▼──────────────────┐ │
-│                                  │   Fhenix CoFHE Coprocessor  │ │
-│                                  │   (off-chain FHE execution) │ │
-│                                  │   Encrypted results returned│ │
-│                                  └──────────┬──────────────────┘ │
-│                                             │                     │
-│                                   After close: decryption request │
-│                                             │                     │
-│                                  ┌──────────▼──────────────────┐ │
-│                                  │    Fhenix Threshold Network  │ │
-│                                  │    (multi-party decryption)  │ │
-│                                  │    Returns: plaintext + sig  │ │
-│                                  └──────────┬──────────────────┘ │
-│                                             │                     │
-│                                   revealWinner(plaintext, sig)    │
-│                                             │                     │
-│                                  ┌──────────▼──────────────────┐ │
-│                                  │  FHE.publishDecryptResult() │ │
-│                                  │  Verifies signature on-chain│ │
-│                                  │  Stores winner trustlessly  │ │
-│                                  └─────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      PrivaBid Platform                            │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │              Auction Mode Router                          │    │
+│  │  FirstPrice │ Vickrey │ Dutch │ Reverse │ Custom         │    │
+│  └──────────────────────┬───────────────────────────────────┘    │
+│                         │                                          │
+│         ┌───────────────┼────────────────┐                        │
+│         ▼               ▼                ▼                        │
+│   ┌──────────┐   ┌──────────┐   ┌──────────────┐                 │
+│   │ Bidder   │   │Auctioneer│   │    Seller    │                 │
+│   │ bid()    │   │ close()  │   │ submitAsk()  │                 │
+│   └────┬─────┘   └────┬─────┘   └──────┬───────┘                 │
+│        │              │                 │                          │
+│        └──────────────┴─────────────────┘                         │
+│                         │                                          │
+│              ┌──────────▼──────────────────┐                      │
+│              │     PrivaBid.sol            │                      │
+│              │                             │                      │
+│              │  euint64  highestBid        │                      │
+│              │  euint64  secondHighestBid  │  ← Vickrey           │
+│              │  euint64  lowestAsk         │  ← Reverse           │
+│              │  eaddress highestBidder     │                      │
+│              │                             │                      │
+│              │  FHE.gt / FHE.lt            │  ← comparisons       │
+│              │  FHE.max / FHE.min          │  ← updates           │
+│              │  FHE.select                 │  ← winner tracking   │
+│              └──────────┬──────────────────┘                      │
+│                         │                                          │
+│                FHE tasks submitted to coprocessor                  │
+│                         │                                          │
+│              ┌──────────▼──────────────────┐                      │
+│              │   Fhenix CoFHE Coprocessor  │                      │
+│              │   Encrypted compute layer   │                      │
+│              └──────────┬──────────────────┘                      │
+│                         │                                          │
+│                After close: decryption request                     │
+│                         │                                          │
+│              ┌──────────▼──────────────────┐                      │
+│              │  Fhenix Threshold Network   │                      │
+│              │  MPC decryption + signature │                      │
+│              └──────────┬──────────────────┘                      │
+│                         │                                          │
+│              ┌──────────▼──────────────────┐                      │
+│              │  FHE.publishDecryptResult() │                      │
+│              │  On-chain proof verification│                      │
+│              └─────────────────────────────┘                      │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Complete Auction Lifecycle
 
 #### Phase 1 — Deploy
-The auctioneer deploys `PrivaBid.sol` with item details, reserve price, and duration.
+Contract deployed with auction mode, item details, reserve price, duration.
+Encrypted state initialised with trivial FHE zeros. `FHE.allowThis()` grants contract ACL access.
 
-Internally, the contract initializes:
-```solidity
-highestBid    = FHE.asEuint64(0);       // encrypted zero — baseline for comparisons
-highestBidder = FHE.asEaddress(address(0)); // encrypted zero address
-FHE.allowThis(highestBid);              // grant contract ACL access
-FHE.allowThis(highestBidder);
-```
-
-**Visible to observers:** Item name, reserve price, end time. Nothing else.
-
----
-
-#### Phase 2 — Bidding
-Any wallet calls `bid(amount)`. Four FHE operations run in sequence:
-
-```
-bid(5000) received
-  │
-  ├─ FHE.asEuint64(5000)        → encryptedAmount  [ciphertext, unreadable]
-  ├─ FHE.gt(encryptedAmount,    → isHigher         [encrypted bool]
-  │         highestBid)
-  ├─ FHE.max(encryptedAmount,   → new highestBid   [encrypted, updated]
-  │          highestBid)
-  └─ FHE.select(isHigher,       → new highestBidder [encrypted, updated]
-                newBidder,
-                currentBidder)
-```
-
-At every step, the values remain ciphertext. The contract does not know whether the new bid was higher. The bidder list does not know each other's amounts.
-
-**Visible to observers:** Bidder wallet address, timestamp. Bid amount: encrypted.
-
----
+#### Phase 2 — Bidding / Ask Submission
+Each call runs sequential FHE operations. All values stay ciphertext throughout.
+Bidder addresses are public. Bid amounts are encrypted.
 
 #### Phase 3 — Close
-The auctioneer calls `closeBidding()`. This does two things:
-1. Sets `auctionClosed = true` — no more bids accepted
-2. Calls `FHE.allowPublic(highestBid)` and `FHE.allowPublic(highestBidder)`
-
-`FHE.allowPublic()` does **not** decrypt the values. It registers in the Fhenix ACL that these handles can now be decrypted by anyone — without requiring a signed user permit.
-
-**Visible to observers:** Auction is closed. All bid amounts still encrypted.
-
----
+Auctioneer calls `closeBidding()`. `FHE.allowPublic()` authorises Threshold Network decryption of winning values only. Losing bids remain permanently sealed.
 
 #### Phase 4 — Off-Chain Decryption
-Anyone can now call the Threshold Network off-chain:
-
-```typescript
-const bidHandle    = await contract.getHighestBidHandle();
-const bidderHandle = await contract.getHighestBidderHandle();
-
-const bidResult    = await client.decryptForTx(bidHandle).withoutPermit().execute();
-const bidderResult = await client.decryptForTx(bidderHandle).withoutPermit().execute();
-// Returns: { decryptedValue, signature }
-```
-
-The **Threshold Network** is a decentralized system of nodes. Each node holds a shard of the decryption key. They cooperate using Multi-Party Computation (MPC) — no single node ever holds the full key. They collectively decrypt and return `(plaintext, signature)` where the signature is a cryptographic proof that the plaintext is correct.
-
----
+`client.decryptForTx(handle).withoutPermit().execute()` — Threshold Network returns `(plaintext, signature)`.
 
 #### Phase 5 — On-Chain Reveal
-Anyone submits the decrypted values + signatures to the contract:
-
-```solidity
-function revealWinner(
-    euint64 bidCtHash,      uint64  bidPlaintext,   bytes bidSignature,
-    eaddress bidderCtHash,  address bidderPlaintext, bytes bidderSignature
-) external {
-    FHE.publishDecryptResult(bidCtHash,    bidPlaintext,    bidSignature);
-    FHE.publishDecryptResult(bidderCtHash, bidderPlaintext, bidderSignature);
-    winningBid    = bidPlaintext;
-    winningBidder = bidderPlaintext;
-}
-```
-
-`FHE.publishDecryptResult()` verifies the Threshold Network signature on-chain. If anyone tries to submit a fake winner — wrong plaintext, forged signature — **the transaction reverts**. The result is cryptographically proven.
-
-**Visible to observers:** Winner address and winning bid amount. All losing bid amounts: permanently sealed, never revealed.
+`FHE.publishDecryptResult()` verifies signature on-chain. Reverts if invalid. Winner stored trustlessly with cryptographic proof.
 
 ---
 
-## 6. FHE Primitives Used
+## 7. FHE Primitives Used
 
-Every FHE function in PrivaBid is intentional. Here's what each one does and why it's there:
-
-| Function | Purpose | Why It's Needed |
+| Function | Purpose | Auction Modes |
 |---|---|---|
-| `FHE.asEuint64(amount)` | Encrypt plaintext bid on-chain | Converts incoming bid to ciphertext immediately — never stored as plaintext |
-| `FHE.asEaddress(addr)` | Encrypt bidder address | Hides even who is winning during active auction |
-| `FHE.gt(a, b)` | Encrypted comparison → `ebool` | Compare bids without decrypting either value |
-| `FHE.max(a, b)` | Encrypted maximum → `euint64` | Update highest bid without revealing either value |
-| `FHE.select(cond, a, b)` | Encrypted ternary → `eaddress` | Update highest bidder without branching on plaintext condition |
-| `FHE.allowThis(handle)` | Grant contract ACL access | FHE values are immutable — new handles need permission re-granted after every operation |
-| `FHE.allowPublic(handle)` | Authorize public decryption | Tells Threshold Network: respond to decryption requests without user permit |
-| `FHE.publishDecryptResult()` | Verify Threshold Network proof | Trustless on-chain verification of decryption — reverts if signature is invalid |
+| `FHE.asEuint64(amount)` | Encrypt plaintext bid immediately | All |
+| `FHE.asEaddress(addr)` | Encrypt bidder/seller address | All |
+| `FHE.gt(a, b)` | Encrypted greater-than → `ebool` | First-price, Vickrey |
+| `FHE.lt(a, b)` | Encrypted less-than → `ebool` | Reverse, Dutch |
+| `FHE.max(a, b)` | Encrypted maximum → `euint64` | First-price, Vickrey |
+| `FHE.min(a, b)` | Encrypted minimum → `euint64` | Reverse, Dutch |
+| `FHE.select(cond, a, b)` | Encrypted ternary → any type | All |
+| `FHE.gte(a, b)` | Encrypted ≥ comparison | Encrypted reserve check |
+| `FHE.lte(a, b)` | Encrypted ≤ comparison | Dutch threshold check |
+| `FHE.allowThis(handle)` | Grant contract ACL access | All — after every operation |
+| `FHE.allowPublic(handle)` | Authorize Threshold Network decryption | All — at close |
+| `FHE.publishDecryptResult()` | Verify Threshold Network proof on-chain | All — at reveal |
 
 ---
 
-## 7. Smart Contract Overview
+## 8. Smart Contract Overview
 
+### First-Price (Mode 1) — Core Logic
 ```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.19 <0.9.0;
-
 import "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
-contract PrivaBid {
-    address public immutable auctioneer;
-    string  public itemName;
-    uint64  public reservePrice;       // plaintext — public reserve prices are standard
-    uint256 public auctionEndTime;
-    bool    public auctionClosed;
-
-    euint64  private highestBid;       // ENCRYPTED — nobody can read this
-    eaddress private highestBidder;    // ENCRYPTED — nobody can read this
-
-    uint64  public winningBid;         // revealed only after cryptographic proof
-    address public winningBidder;      // revealed only after cryptographic proof
+contract PrivaBidFirstPrice {
+    euint64  private highestBid;       // ENCRYPTED
+    eaddress private highestBidder;    // ENCRYPTED
+    uint64   public  winningBid;       // revealed after proof
+    address  public  winningBidder;    // revealed after proof
 
     function bid(uint64 amount) external {
-        euint64 enc       = FHE.asEuint64(amount);
-        ebool   isHigher  = FHE.gt(enc, highestBid);
-        highestBid        = FHE.max(enc, highestBid);
-        highestBidder     = FHE.select(isHigher, FHE.asEaddress(msg.sender), highestBidder);
+        euint64 enc      = FHE.asEuint64(amount);
+        ebool   isHigher = FHE.gt(enc, highestBid);
+        highestBid       = FHE.max(enc, highestBid);
+        highestBidder    = FHE.select(isHigher,
+                             FHE.asEaddress(msg.sender), highestBidder);
         FHE.allowThis(highestBid);
         FHE.allowThis(highestBidder);
-    }
-
-    function closeBidding() external onlyAuctioneer {
-        FHE.allowPublic(highestBid);
-        FHE.allowPublic(highestBidder);
-        auctionClosed = true;
-    }
-
-    function revealWinner(
-        euint64 bidCtHash, uint64 bidPlaintext, bytes calldata bidSig,
-        eaddress bidderCtHash, address bidderPlaintext, bytes calldata bidderSig
-    ) external {
-        FHE.publishDecryptResult(bidCtHash, bidPlaintext, bidSig);
-        FHE.publishDecryptResult(bidderCtHash, bidderPlaintext, bidderSig);
-        winningBid    = bidPlaintext;
-        winningBidder = bidderPlaintext;
     }
 }
 ```
 
-> Full annotated contract: [`contracts/PrivaBid.sol`](contracts/PrivaBid.sol)
+### Vickrey (Mode 2) — Dual Encrypted Value Tracking
+```solidity
+contract PrivaBidVickrey {
+    euint64  private highestBid;
+    euint64  private secondHighestBid;  // winner PAYS this
+    eaddress private highestBidder;
 
-### What makes this privacy-by-design (not privacy bolted on):
+    function bid(uint64 amount) external {
+        euint64 enc      = FHE.asEuint64(amount);
+        ebool   isHighest = FHE.gt(enc, highestBid);
+        ebool   isSecond  = FHE.gt(enc, secondHighestBid);
 
-1. **Privacy is the default** — `euint64` simply cannot be read. There's no configuration, no privacy mode. Confidentiality is enforced at the type level.
-2. **Losing bids are permanently private** — `FHE.allowPublic()` is called only on the winning handles. Losing bids are sealed forever.
-3. **No trusted third party** — the Threshold Network is decentralized; no single entity controls the decryption key.
-4. **Math enforces it, not rules** — the auctioneer cannot see bids even if they wanted to. The cryptography prevents it, not a terms of service.
+        // Update second before overwriting highest
+        secondHighestBid = FHE.select(isHighest, highestBid,
+                             FHE.select(isSecond, enc, secondHighestBid));
+        highestBid       = FHE.max(enc, highestBid);
+        highestBidder    = FHE.select(isHighest,
+                             FHE.asEaddress(msg.sender), highestBidder);
+
+        FHE.allowThis(highestBid);
+        FHE.allowThis(secondHighestBid);
+        FHE.allowThis(highestBidder);
+    }
+}
+```
+
+### Reverse Auction (Mode 4) — FHE.min instead of FHE.max
+```solidity
+contract PrivaBidReverse {
+    euint64  private lowestAsk;
+    eaddress private lowestSeller;
+
+    function submitAsk(uint64 price) external {
+        euint64 enc     = FHE.asEuint64(price);
+        ebool   isLower = FHE.lt(enc, lowestAsk);
+        lowestAsk       = FHE.min(enc, lowestAsk);   // FHE.min
+        lowestSeller    = FHE.select(isLower,
+                            FHE.asEaddress(msg.sender), lowestSeller);
+        FHE.allowThis(lowestAsk);
+        FHE.allowThis(lowestSeller);
+    }
+}
+```
+
+> Full annotated contracts: [`contracts/`](contracts/)
+
+### What makes this privacy-by-design:
+
+1. **Privacy is the default** — `euint64` cannot be read. No configuration needed. Enforced at the type level.
+2. **Losing bids are permanently private** — `FHE.allowPublic()` is called only on winning handles. All others are sealed forever.
+3. **No trusted third party** — Threshold Network is decentralised. No single entity controls the decryption key.
+4. **Math enforces it, not rules** — the auctioneer cannot see bids even if they wanted to.
+5. **Multiple auction modes, same guarantee** — every mode uses FHE differently, but the privacy property is identical across all of them.
 
 ---
 
-## 8. Use Cases
-
-PrivaBid is a general primitive. The same contract pattern unlocks multiple markets that have no viable on-chain solution today:
+## 9. Use Cases
 
 ### Confidential DeFi
-**NFT Auctions** — Eliminate sniping and whale manipulation. True price discovery where the best offer wins, not the most patient bot.
+**NFT Auctions** — First-price or Vickrey mode. Eliminate sniping and whale manipulation. True price discovery.
 
-**Token Launches / IDOs** — Encrypted order books prevent front-running bots from capturing all value during price discovery. Every participant competes on equal footing.
+**Token Launches / IDOs** — Vickrey mode ensures fair allocation. No one can front-run encrypted order books.
 
-**MEV-Protected Order Flow** — The PrivaBid pattern generalizes to DEX order execution: orders are encrypted until matched, eliminating the entire class of sandwich attacks.
+**MEV-Protected Order Flow** — The PrivaBid pattern generalises to DEX execution: encrypted orders, matched in FHE space, eliminating sandwich attacks entirely.
 
 ### Institutional & Compliance
-**RWA Liquidations** — Real-world asset pricing cannot be public in regulated markets. PrivaBid gives institutional buyers a compliant, privacy-preserving auction with a publicly verifiable result.
+**Government & Corporate Procurement** — Reverse auction mode. Vendors submit encrypted asks. The buyer gets the best price. No vendor sees a competitor's offer. Legally required in most jurisdictions for public tenders.
 
-**Government & Corporate Procurement** — The multi-trillion dollar procurement market requires sealed bids by law in most jurisdictions. PrivaBid is the first infrastructure that delivers sealed bids on-chain with cryptographic proof of fairness.
+**RWA Liquidations** — First-price or Vickrey mode. Institutional-grade privacy for sensitive asset sales. Publicly verifiable outcome.
 
-**Treasury Management** — DAOs and institutions moving large positions cannot signal their trades publicly without market impact. Private execution with on-chain settlement.
+**DAO Treasury Auctions** — Any mode. DAOs selling treasury assets or procuring services without leaking strategic pricing to the market.
 
-### Why These Markets Can't Use Existing Infrastructure
-These use cases all share one requirement: the losing bidders' information must never be revealed. Commit-reveal fails this test. Off-chain matching fails the trustless test. Only FHE-native auctions satisfy both simultaneously.
+### Novel FHE-Only Use Cases
+**Blind Dutch Auctions** — Encrypted thresholds mean no bidder can time their acceptance by watching others. Impossible on transparent chains.
+
+**Double-Blind Procurement** — Both the buyer's budget and the sellers' asks are encrypted. The contract finds the optimal match in FHE space. A genuinely new financial primitive.
 
 ---
 
-## 9. Long-Term Vision
+## 10. Long-Term Vision
 
-PrivaBid is not just an auction contract. It is a foundational primitive for a class of applications that **cannot exist on transparent rails**.
+PrivaBid is not a single auction contract. It is the **standard auction primitive layer for the FHE ecosystem**.
 
-### The Encrypted Economy Layer
-Every financial market has information asymmetry problems. On-chain, these problems are amplified because transparency is the default. PrivaBid demonstrates that encrypted compute can solve these problems without sacrificing verifiability or trustlessness.
+### The Auction Factory
+Long term, PrivaBid ships as an **Auction Factory** — a single deployed contract that lets anyone spin up any auction type with one call:
 
-The long-term goal is to become the **standard auction and order-matching primitive** for the FHE ecosystem — the way Uniswap V2 became the standard AMM primitive. Any protocol needing sealed-bid mechanics would integrate PrivaBid rather than building their own.
+```solidity
+auctionFactory.create(AuctionMode.VICKREY, itemName, reservePrice, duration);
+auctionFactory.create(AuctionMode.REVERSE, contractDescription, budget, deadline);
+auctionFactory.create(AuctionMode.DUTCH, assetName, startingPrice, floorPrice);
+```
+
+Any protocol integrates PrivaBid as a module. No custom FHE development needed.
 
 ### Composability
-Because PrivaBid is a smart contract, it is composable:
-- NFT marketplaces can integrate it as their auction module
-- Lending protocols can use it for encrypted liquidation auctions
-- DAOs can use it for sealed governance votes on treasury allocation
-- RWA platforms can build compliant bid workflows on top of it
+- NFT marketplaces plug in PrivaBid as their auction engine
+- Lending protocols use it for encrypted liquidation auctions
+- DAOs use it for sealed treasury allocation votes
+- RWA platforms build compliant workflows on top of it
+- Government procurement systems use the reverse auction module
 
 ### The Institutional Gateway
-Institutions with compliance requirements currently cannot use on-chain auctions. PrivaBid removes that blocker. As FHE matures and gas costs decrease, PrivaBid becomes the entry point for institutional capital into DeFi — not as a workaround, but as a genuinely better product than traditional sealed-bid systems.
+Institutions with compliance requirements currently cannot use on-chain auctions. PrivaBid removes that blocker. As FHE matures, PrivaBid becomes the entry point for institutional capital into DeFi — a genuinely better product than traditional sealed-bid systems.
 
-Traditional sealed bids require: a trusted auctioneer, legal agreements, escrow, and post-audit. PrivaBid replaces all of that with: a deployed contract, math, and a publicly verifiable result. That is a strictly better product.
+Traditional sealed bids require: a trusted auctioneer, legal agreements, escrow, and post-audit. PrivaBid replaces all of that with a deployed contract, math, and a publicly verifiable result.
 
 ---
 
-## 10. Roadmap
+## 11. Roadmap
 
 | Wave | Dates | Deliverables |
 |---|---|---|
-| **Wave 1** *(current)* | Mar 21 – Mar 28 | Documentation, smart contract structure, FHE logic proof, architecture diagrams |
-| **Wave 2** | Mar 30 – Apr 6 | Deployed contract on Arbitrum Sepolia, Hardhat test suite with mock FHE, ERC-20 (USDC) bid integration |
-| **Wave 3** | Apr 8 – May 8 | Full frontend (React + TypeScript), live auction demo with testnet USDC, Privara SDK integration for confidential settlement |
-| **Wave 4** | May 11 – May 20 | Auction factory contract, multi-item batch auctions, Dutch auction variant, SDK for third-party integration |
-| **Wave 5** | May 23 – Jun 1 | Mainnet deployment prep, security audit, ecosystem partnership outreach (NFT platforms, DeFi protocols) |
+| **Wave 1** ✅ | Mar 21 – Mar 28 | First-price sealed-bid contract, deployed on Arbitrum Sepolia, full architecture documentation, multi-mode platform design |
+| **Wave 2** 🔨 | Mar 30 – Apr 6 | Vickrey (second-price) contract with dual encrypted value tracking, encrypted reserve price feature, ERC-20 (USDC) bid deposits, Hardhat test suite |
+| **Wave 3** 📋 | Apr 8 – May 8 | Dutch auction with encrypted thresholds, full React + TypeScript frontend, live testnet demo with wallet integration, `@cofhe/sdk` full flow |
+| **Wave 4** 📋 | May 11 – May 20 | Reverse/procurement auction (`FHE.min`), Auction Factory contract, Privara SDK integration for confidential settlement |
+| **Wave 5** 📋 | May 23 – Jun 1 | Mainnet prep, security audit of FHE access control model, PrivaBid SDK for third-party protocol integration, ecosystem outreach |
 
 ---
 
-## 11. Technical Stack
+## 12. Technical Stack
 
 | Layer | Technology | Purpose |
 |---|---|---|
 | FHE Infrastructure | [Fhenix CoFHE](https://fhenix.io) | Encrypted compute coprocessor |
-| Smart Contracts | Solidity `^0.8.19` + `FHE.sol` | On-chain encrypted auction logic |
-| Contract Dev | Hardhat + `cofhe-hardhat-plugin` | Local development with mock FHE |
-| Client SDK | `@cofhe/sdk` | Encrypt inputs, manage permits, decrypt outputs |
+| Smart Contracts | Solidity `^0.8.19` + `FHE.sol` | On-chain encrypted auction logic across all modes |
+| Contract Dev | Hardhat + `cofhe-hardhat-plugin` | Local development with mock FHE environment |
+| Client SDK | `@cofhe/sdk` | Encrypt inputs, manage permits, Threshold Network decryption |
 | Frontend | React + TypeScript + `@cofhe/react` | `useEncrypt`, `useDecrypt` hooks |
-| Payments | `@reineira-os/sdk` (Privara) | Confidential payment settlement flows |
+| Payments | `@reineira-os/sdk` (Privara) | Confidential payment settlement |
 | Networks | Arbitrum Sepolia, Base Sepolia, Ethereum Sepolia | FHE-compatible testnets |
 
 ---
 
-## 12. Getting Started
+## 13. Getting Started
 
 ### Prerequisites
 - Node.js v20+
@@ -443,9 +530,10 @@ pnpm hardhat run scripts/deploy.ts --network arb-sepolia
 
 - [Fhenix Documentation](https://docs.fhenix.io)
 - [CoFHE Quick Start](https://cofhe-docs.fhenix.zone/fhe-library/introduction/quick-start)
-- [Official Auction Example (base for PrivaBid)](https://cofhe-docs.fhenix.zone/fhe-library/examples/auction-example)
+- [Official Auction Example](https://cofhe-docs.fhenix.zone/fhe-library/examples/auction-example)
 - [FHE Encrypted Operations](https://cofhe-docs.fhenix.zone/fhe-library/core-concepts/encrypted-operations)
 - [Threshold Network / Decryption](https://cofhe-docs.fhenix.zone/fhe-library/core-concepts/decryption-operations)
+- [Fhenix Sandbox](https://www.fhenix.io/sandbox)
 - [Privara SDK](https://www.npmjs.com/package/@reineira-os/sdk)
 - [Fhenix Buildathon Telegram](https://t.me/+rA9gI3AsW8c3YzIx)
 
