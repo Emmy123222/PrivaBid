@@ -1,7 +1,6 @@
 # PrivaBid — Technical Architecture
 
-This document describes the cryptographic architecture of PrivaBid in depth.
-Written for technical judges who want to understand *why* every design decision was made.
+This document describes the cryptographic architecture of PrivaBid in depth, covering all four auction modes and the FHE design decisions behind each one. Written for technical judges who want to understand *why* every decision was made.
 
 ---
 
@@ -11,11 +10,14 @@ Written for technical judges who want to understand *why* every design decision 
 2. [Fhenix CoFHE — How It Works](#2-fhenix-cofhe--how-it-works)
 3. [The Encrypted Type System](#3-the-encrypted-type-system)
 4. [The ACL (Access Control Layer)](#4-the-acl-access-control-layer)
-5. [Bid Flow — FHE Operations in Detail](#5-bid-flow--fhe-operations-in-detail)
-6. [The Threshold Network Decryption](#6-the-threshold-network-decryption)
-7. [Privacy Guarantees — What Is and Isn't Hidden](#7-privacy-guarantees--what-is-and-isnt-hidden)
-8. [Gas Considerations](#8-gas-considerations)
-9. [Security Model](#9-security-model)
+5. [Mode 1 — First-Price: FHE Operations in Detail](#5-mode-1--first-price-fhe-operations-in-detail)
+6. [Mode 2 — Vickrey: Dual Encrypted Value Tracking](#6-mode-2--vickrey-dual-encrypted-value-tracking)
+7. [Mode 3 — Dutch: Encrypted Thresholds](#7-mode-3--dutch-encrypted-thresholds)
+8. [Mode 4 — Reverse: FHE.min and Procurement](#8-mode-4--reverse-fhemin-and-procurement)
+9. [The Threshold Network Decryption](#9-the-threshold-network-decryption)
+10. [Privacy Guarantees Across All Modes](#10-privacy-guarantees-across-all-modes)
+11. [Gas Considerations](#11-gas-considerations)
+12. [Security Model](#12-security-model)
 
 ---
 
@@ -23,157 +25,141 @@ Written for technical judges who want to understand *why* every design decision 
 
 ### The Core Requirement
 
-A sealed-bid auction needs to answer the question: **"Which of these N encrypted bids is the highest?"**
+An encrypted auction needs to answer: **"Which of these N encrypted values wins, and by what amount?"**
 
-This requires:
-- Storing N encrypted values
-- Computing comparisons across all N values
-- Updating a running maximum without decrypting
-- Conditionally updating the current winner
+Across PrivaBid's four modes, this requires:
+- Storing N encrypted bid/ask values
+- Computing comparisons across all N values without decrypting
+- Updating a running maximum or minimum without decrypting
+- Conditionally updating the winner identity without branching on plaintext
+- In Vickrey mode: tracking the **top two** values simultaneously
+- In Dutch mode: checking encrypted thresholds against a changing price
+- In Reverse mode: finding the **minimum** of N encrypted asks
 
-No existing technology other than FHE can do all four on a general-purpose smart contract platform.
+No existing technology other than FHE can satisfy all of these requirements on a general-purpose smart contract platform.
 
 ### ZK Proofs Cannot Solve This
 
-ZK proofs are great at verifying statements about known values:
-- "I know a value `x` such that `x > 1000`" ✓
-- "I know the preimage of this hash" ✓
+ZK proofs verify statements about known values. They cannot compute across multiple private inputs held by different parties.
 
-But ZK proofs cannot compute *across* multiple private inputs held by different parties:
-- "Given 50 sealed bids, find the maximum" ✗
+```
+ZK can prove:  "my bid > 1000"  ✓
+ZK cannot do:  "find max(bid_1, bid_2, ..., bid_50)"  ✗
+```
 
-To do this with ZK, you'd need to:
-1. Have all bidders reveal their bids to a prover
-2. The prover computes the max off-chain
-3. The prover submits a ZK proof of correct computation
-
-This reintroduces a trusted prover — defeating the purpose.
+To do multi-party max with ZK you need a trusted prover who sees all bids — defeating the purpose.
 
 ### Commit-Reveal Leaks Everything
 
-Commit-reveal protects bids during the bidding phase. But at reveal:
-- **All** bids become public
-- Losing bidders' amounts are permanently on-chain
-- Anyone can study historical auctions to model bidding strategies
+Commit-reveal protects bids during the bidding phase. But at reveal, **all** bids become public. Losers' amounts are on-chain forever.
 
-PrivaBid's guarantee: **losing bids are never decrypted, ever.**
-`FHE.allowPublic()` is called only on the winning bid handle.
-All other bid ciphertexts are orphaned — unreadable forever.
+PrivaBid's guarantee: **losing bids are never decrypted**. `FHE.allowPublic()` is called only on winning handles. All other ciphertexts are computationally indistinguishable from random data — unreadable forever, regardless of computational power.
 
-### FHE Is the Right Tool
+### Why FHE Is the Right Tool
 
 ```
-Requirement                      | ZK Proof | Commit-Reveal | FHE
-─────────────────────────────────|──────────|───────────────|────
-Store N encrypted bids           |    ✓     |       ✓       |  ✓
-Compare bids without decrypting  |    ✗     |       ✗       |  ✓
-Update winner without decrypting |    ✗     |       ✗       |  ✓
-Losing bids never revealed       |    △     |       ✗       |  ✓
-Trustless (no prover/operator)   |    △     |       ✓       |  ✓
-General-purpose smart contract   |    △     |       ✓       |  ✓
+Requirement                            | ZK  | Commit-Reveal | FHE
+───────────────────────────────────────|─────|───────────────|────
+Store N encrypted bids                 |  ✓  |      ✓        |  ✓
+Compare bids without decrypting        |  ✗  |      ✗        |  ✓
+Find max/min without decrypting        |  ✗  |      ✗        |  ✓
+Track first AND second highest         |  ✗  |      ✗        |  ✓
+Losing bids permanently sealed         |  △  |      ✗        |  ✓
+Encrypted threshold comparisons        |  ✗  |      ✗        |  ✓
+No trusted prover or operator          |  △  |      ✓        |  ✓
+General-purpose smart contract         |  △  |      ✓        |  ✓
 ```
 
 ---
 
 ## 2. Fhenix CoFHE — How It Works
 
-Fhenix implements FHE as an **off-chain coprocessor** for EVM-compatible chains.
+Fhenix implements FHE as an off-chain coprocessor for EVM-compatible chains.
 
 ```
 Smart Contract (Solidity)
        │
-       │  FHE.gt(a, b) — submits a "task" to the coprocessor
+       │  FHE.gt(a, b) → submits a task to the coprocessor
        ▼
   Task Manager (on-chain)
-       │
        │  task queued with ciphertext handles
        ▼
   Slim Listener (off-chain)
-       │
        │  picks up task, forwards to FHE execution
        ▼
   FheOS Server (off-chain)
-       │
-       │  performs FHE computation on actual ciphertexts
+       │  performs actual FHE computation on ciphertexts
        │  returns encrypted result
        ▼
   Result Processor (off-chain → on-chain)
-       │
        │  submits encrypted result back to blockchain
        ▼
-Smart Contract receives euint64 result
+Smart Contract receives encrypted result
 ```
 
-Key insight: **the EVM never touches actual ciphertext**. The on-chain contract works with *handles* — 32-byte identifiers that reference ciphertexts stored in the CoFHE coprocessor. FHE operations are asynchronous: the contract submits a task and receives a result.
-
-This is why FHE operations cost more gas than standard operations — they involve multiple on-chain steps plus off-chain computation.
+Key insight: **the EVM never touches actual ciphertext**. On-chain contracts work with *handles* — 32-byte identifiers referencing ciphertexts in the CoFHE coprocessor. FHE operations are asynchronous: the contract submits a task and receives a result handle.
 
 ---
 
 ## 3. The Encrypted Type System
 
-Fhenix's `FHE.sol` library introduces encrypted variants of standard Solidity types:
+Fhenix's `FHE.sol` introduces encrypted variants of standard Solidity types:
 
-| Encrypted Type | Plaintext Equivalent | Use in PrivaBid |
+| Encrypted Type | Plaintext Equivalent | Used in PrivaBid |
 |---|---|---|
-| `euint64` | `uint64` | Encrypted bid amounts |
-| `eaddress` | `address` | Encrypted bidder addresses |
-| `ebool` | `bool` | Encrypted comparison results |
-| `euint8` | `uint8` | (available, not used in PrivaBid) |
-| `euint32` | `uint32` | (available, not used in PrivaBid) |
+| `euint64` | `uint64` | Bid amounts, ask prices, thresholds, reserve price |
+| `eaddress` | `address` | Bidder and seller addresses |
+| `ebool` | `bool` | Comparison results (isHigher, isLower, isSecond) |
 
-### Why `euint64` for bids?
+### Why `euint64` for all monetary values?
 
-- Supports values up to 18,446,744,073,709,551,615 (~18 quintillion)
-- More than sufficient for any real-world auction value (even at 6 decimal places for USDC: max ~18 trillion USDC)
-- `euint32` (max ~4.2 billion) would be too small for large institutional auctions
+Supports up to 18.4 quintillion — sufficient for any real-world auction value at any decimal precision. Using `euint64` consistently across all four modes makes the contract interface uniform and composable.
 
-### Why `eaddress` for the bidder?
+### Why `eaddress` for winner identity?
 
-The winner's address needs to be hidden during the auction. If `highestBidder` were stored as a regular `address`, anyone could watch who is currently winning and adjust their strategy. By using `eaddress`, even the current leader is unknown to all participants.
+If the current winner was stored as a regular `address`, anyone could watch who is currently leading and adjust their strategy. `eaddress` hides the current leader across all auction phases.
 
 ---
 
 ## 4. The ACL (Access Control Layer)
 
-Every encrypted value in Fhenix is controlled by an Access Control List. This determines which contracts and addresses can **use** a given ciphertext handle.
+Every encrypted value in Fhenix is controlled by an Access Control List. This determines which contracts and addresses can use each ciphertext handle.
 
-### Why the ACL Exists
+### The Immutability Pattern — Critical to Understand
 
-Without an ACL, any contract could take any encrypted handle and submit it to FHE operations, potentially leaking information through side channels. The ACL ensures only authorized parties can work with each ciphertext.
+FHE values are **immutable**. `FHE.max(a, b)` does not modify `a` or `b`. It returns a **new** handle. This means:
 
-### How PrivaBid Uses the ACL
+1. `highestBid = FHE.max(enc, highestBid)` replaces `highestBid` with a new handle
+2. The new handle has no ACL permissions yet
+3. `FHE.allowThis()` must be called on the new handle
+4. If forgotten: the next `bid()` call fails with an ACL error
+
+This is the most common mistake when first building with Fhenix FHE. Every mode in PrivaBid calls `FHE.allowThis()` after every operation that produces a new handle.
+
+### ACL State Across the Auction Lifecycle
 
 ```
 Constructor:
-  highestBid    = FHE.asEuint64(0)    // handle created, owned by constructor call
-  FHE.allowThis(highestBid)           // grants PrivaBid contract permission
+  FHE.allowThis(highestBid)          // contract can access
+  FHE.allowThis(secondHighestBid)    // Vickrey only
+  FHE.allowThis(lowestAsk)           // Reverse only
 
-bid():
-  enc           = FHE.asEuint64(amount)
-  isHigher      = FHE.gt(enc, highestBid)
-  highestBid    = FHE.max(enc, highestBid)   // NEW handle — old one replaced
-  highestBidder = FHE.select(...)             // NEW handle — old one replaced
-  FHE.allowThis(highestBid)                  // re-grant on new handle
-  FHE.allowThis(highestBidder)               // re-grant on new handle
+bid() / submitAsk():
+  ... FHE operations produce new handles ...
+  FHE.allowThis(newHandle)           // re-grant after EVERY operation
 
 closeBidding():
-  FHE.allowPublic(highestBid)         // Threshold Network can now decrypt this
-  FHE.allowPublic(highestBidder)      // Threshold Network can now decrypt this
+  FHE.allowPublic(highestBid)        // Threshold Network can now decrypt
+  FHE.allowPublic(secondHighestBid)  // Vickrey: winner pays this
+  // losingBids: NEVER get allowPublic — permanently sealed
+
+revealWinner():
+  FHE.publishDecryptResult(...)      // verify Threshold Network proof
 ```
-
-### The Immutability Pattern
-
-FHE values are immutable — `FHE.max(a, b)` doesn't modify `a` or `b`. It returns a **new** encrypted value with a new handle. This means:
-
-1. After `highestBid = FHE.max(enc, highestBid)`, the variable `highestBid` now points to a new handle
-2. The old handle is still valid but no longer pointed to by anything in the contract
-3. The new handle has no ACL permissions yet — we must call `FHE.allowThis()` on it
-4. If we forget `FHE.allowThis()`, the next `bid()` call fails with an ACL error when it tries to use `highestBid`
 
 ---
 
-## 5. Bid Flow — FHE Operations in Detail
+## 5. Mode 1 — First-Price: FHE Operations in Detail
 
 ### Concrete Example: Three Bidders
 
@@ -185,225 +171,277 @@ Initial state:
 ─────────────────────────────────────────────────────
 Bidder A calls bid(3000):
 
-  enc       = FHE.asEuint64(3000)          → [ciphertext_A]
-  isHigher  = FHE.gt([ciphertext_A], [0])  → [encrypted: TRUE]
-  highestBid    = FHE.max([ct_A], [0])     → [ciphertext: 3000]
+  enc       = FHE.asEuint64(3000)           → [ct_A: 3000]
+  isHigher  = FHE.gt([ct_A], [ct: 0])       → [encrypted: TRUE]
+  highestBid    = FHE.max([ct_A], [ct: 0])  → [ct: 3000]
   highestBidder = FHE.select([TRUE],
-                   [encrypt(addr_A)],
-                   [encrypt(addr_0)])       → [ciphertext: addr_A]
+                   [encrypt(addr_A)], [0])   → [ct: addr_A]
 
-After Bidder A:
-  highestBid    = [ciphertext: 3000]   ← nobody can read this
-  highestBidder = [ciphertext: addr_A] ← nobody can read this
+Nobody sees any of this. Everything is ciphertext.
 
 ─────────────────────────────────────────────────────
 Bidder B calls bid(7000):
 
-  enc       = FHE.asEuint64(7000)               → [ciphertext_B]
-  isHigher  = FHE.gt([ciphertext_B], [ct: 3000]) → [encrypted: TRUE]
-  highestBid    = FHE.max([ct_B], [ct: 3000])   → [ciphertext: 7000]
-  highestBidder = FHE.select([TRUE],
-                   [encrypt(addr_B)],
-                   [ct: addr_A])                 → [ciphertext: addr_B]
-
-After Bidder B:
-  highestBid    = [ciphertext: 7000]   ← nobody can read this
-  highestBidder = [ciphertext: addr_B] ← nobody can read this
+  enc       = FHE.asEuint64(7000)
+  isHigher  = FHE.gt([ct: 7000], [ct: 3000]) → [encrypted: TRUE]
+  highestBid    = FHE.max(...)               → [ct: 7000]
+  highestBidder = FHE.select([TRUE], ...)    → [ct: addr_B]
 
 ─────────────────────────────────────────────────────
 Bidder C calls bid(5000):
 
-  enc       = FHE.asEuint64(5000)               → [ciphertext_C]
-  isHigher  = FHE.gt([ciphertext_C], [ct: 7000]) → [encrypted: FALSE]
-  highestBid    = FHE.max([ct_C], [ct: 7000])   → [ciphertext: 7000]  ← unchanged
-  highestBidder = FHE.select([FALSE],
-                   [encrypt(addr_C)],
-                   [ct: addr_B])                 → [ciphertext: addr_B] ← unchanged
-
-After Bidder C:
-  highestBid    = [ciphertext: 7000]   ← still 7000, nobody knows
-  highestBidder = [ciphertext: addr_B] ← still addr_B, nobody knows
+  enc       = FHE.asEuint64(5000)
+  isHigher  = FHE.gt([ct: 5000], [ct: 7000]) → [encrypted: FALSE]
+  highestBid    = FHE.max(...)               → [ct: 7000]  ← unchanged
+  highestBidder = FHE.select([FALSE], ...)   → [ct: addr_B] ← unchanged
 
 ─────────────────────────────────────────────────────
-After closeBidding() + revealWinner():
-  winningBid    = 7000       ← revealed with cryptographic proof
-  winningBidder = addr_B     ← revealed with cryptographic proof
+After reveal:
+  winningBid    = 7000   ← cryptographically proven
+  winningBidder = addr_B ← cryptographically proven
 
-  Bidder A's bid (3000): PERMANENTLY SEALED. Never decryptable.
-  Bidder C's bid (5000): PERMANENTLY SEALED. Never decryptable.
+  Bidder A's bid (3000): PERMANENTLY SEALED
+  Bidder C's bid (5000): PERMANENTLY SEALED
 ```
 
-Notice: **at no point does the contract know which bid is highest during the auction**. The comparison results are encrypted booleans. The update operations are conditional on encrypted conditions. The contract is operating blind on ciphertext.
+At no point does the contract know which bid is highest. The comparison results are encrypted booleans. The contract operates completely blind on ciphertext.
 
 ---
 
-## 6. The Threshold Network Decryption
+## 6. Mode 2 — Vickrey: Dual Encrypted Value Tracking
 
-### What Is the Threshold Network?
+### Why Vickrey Is More Complex
 
-The Threshold Network is Fhenix's decentralized decryption system. It uses **Multi-Party Computation (MPC)** to enable decryption without any single party holding the full decryption key.
+In Mode 1, the contract tracks one encrypted value: `highestBid`.
+
+In Vickrey, the contract must simultaneously track **two** encrypted values:
+- `highestBid` — determines the winner
+- `secondHighestBid` — determines what the winner pays
+
+Both values must be updated on every incoming bid without decrypting either one. This requires a nested `FHE.select` — a conditional inside a conditional, all in FHE space.
+
+### The Update Logic
 
 ```
-Full decryption key K is split into N shards:
-  K₁, K₂, K₃, ... Kₙ
+New bid enc arrives. Three cases:
+  Case 1: enc > highestBid
+    → secondHighestBid = old highestBid
+    → highestBid = enc
+    → highestBidder = new bidder
 
-Each shard is held by a different node.
+  Case 2: secondHighestBid < enc ≤ highestBid
+    → secondHighestBid = enc
+    → highestBid unchanged
+    → highestBidder unchanged
+
+  Case 3: enc ≤ secondHighestBid
+    → nothing changes
+
+In FHE, both conditions are evaluated simultaneously as encrypted booleans.
+The nested FHE.select handles all three cases without ever knowing which one applies.
+```
+
+```solidity
+ebool isHighest = FHE.gt(enc, highestBid);
+ebool isSecond  = FHE.gt(enc, secondHighestBid);
+
+// Outer select: if new bid is highest, second = old highest
+// Inner select: if new bid is second-best, second = new bid
+// Otherwise: second unchanged
+secondHighestBid = FHE.select(
+    isHighest,
+    highestBid,
+    FHE.select(isSecond, enc, secondHighestBid)
+);
+```
+
+### At Reveal
+
+Two separate Threshold Network decryptions:
+1. `highestBid` → identifies the winner
+2. `secondHighestBid` → determines the payment amount
+
+Winner pays `secondHighestBid`, not `highestBid`. Both values are proven by separate cryptographic signatures.
+
+---
+
+## 7. Mode 3 — Dutch: Encrypted Thresholds
+
+### The Traditional Dutch Auction Problem
+
+In a Dutch auction, price descends from high to low. The first bidder to "accept" wins. On a transparent chain, this is gameable — you can watch the blockchain to see when others are getting close to accepting and time your move.
+
+### PrivaBid's Solution: Encrypted Thresholds
+
+Bidders submit an **encrypted threshold** — the lowest price they are willing to accept. The contract holds all thresholds as ciphertexts and checks them against the current (public) price each block:
+
+```solidity
+euint64 encryptedThreshold = FHE.asEuint64(myFloorPrice);
+FHE.allowThis(encryptedThreshold);
+thresholds[msg.sender] = encryptedThreshold;
+```
+
+Each block, the price drops. The contract checks:
+```solidity
+ebool thresholdMet = FHE.lte(currentPrice, encryptedThreshold);
+// If TRUE (in FHE space): this bidder wins
+```
+
+No bidder can see any other bidder's threshold. Acceptance happens automatically when the descending price meets an encrypted floor — no one can time their acceptance by observing others.
+
+### What This Enables
+
+This is a genuinely new auction primitive that cannot exist on transparent chains. Blind Dutch auctions are used in:
+- Token distributions where the issuer wants true price discovery
+- Declining-price liquidation of distressed assets
+- Time-sensitive sales where urgency should not be exploitable
+
+---
+
+## 8. Mode 4 — Reverse: FHE.min and Procurement
+
+### Flipping the Model
+
+All previous modes track the **highest** value. Reverse auctions track the **lowest**. This requires swapping `FHE.max` for `FHE.min` and `FHE.gt` for `FHE.lt`.
+
+```solidity
+// First-price (Mode 1):
+ebool isHigher = FHE.gt(enc, highestBid);
+highestBid     = FHE.max(enc, highestBid);
+
+// Reverse (Mode 4):
+ebool isLower = FHE.lt(enc, lowestAsk);
+lowestAsk     = FHE.min(enc, lowestAsk);
+```
+
+The ACL model, `FHE.allowThis()` pattern, and Threshold Network reveal are identical. Only the comparison direction and the FHE aggregate function change.
+
+### Why This Matters for Real Markets
+
+Government and corporate procurement by law requires sealed competitive bids in most jurisdictions. On transparent chains, vendors can see each other's prices and engage in strategic undercutting. PrivaBid's reverse auction makes this impossible.
+
+The buyer publishes a contract description and budget (optionally encrypted). Vendors submit encrypted asks. The contract finds `FHE.min()` of all asks. The buyer receives the best price — and no vendor ever sees a competitor's offer.
+
+This is not hypothetical. The global procurement market is worth trillions annually. PrivaBid is the first infrastructure that delivers cryptographically enforced sealed-bid procurement on-chain.
+
+---
+
+## 9. The Threshold Network Decryption
+
+### Architecture
+
+The Threshold Network is Fhenix's decentralised decryption system using Multi-Party Computation (MPC).
+
+```
+Full decryption key K split into N shards:
+  K₁, K₂, K₃, ..., Kₙ — each held by a different node
 
 To decrypt ciphertext C:
-  - Need ≥ T nodes to cooperate (threshold T of N)
-  - Each node uses its shard to compute a partial decryption
-  - Partial decryptions are combined → plaintext P
-  - Nodes jointly sign (P, C) as proof
+  ≥ T nodes must cooperate (threshold T of N)
+  Each computes a partial decryption using their shard
+  Partials combined → plaintext P
+  Nodes jointly sign (P, C) as cryptographic proof
 
-No single node can decrypt alone.
+No single node can decrypt.
 No subset < T can decrypt.
 Only ≥ T honest nodes together can decrypt.
 ```
 
-### The Decrypt-With-Proof Pattern
+### The Decrypt-With-Proof Pattern (All Modes)
 
 ```typescript
-// Step 1: After closeBidding(), get encrypted handles
-const bidHandle    = await contract.getHighestBidHandle();
-const bidderHandle = await contract.getHighestBidderHandle();
+// After closeBidding() — handles are now publicly decryptable
 
-// Step 2: Request decryption from Threshold Network
-// withoutPermit() works because FHE.allowPublic() was called on-chain
+// Mode 1 & 2: get winning bid handle
+const bidHandle = await contract.getHighestBidHandle();
+
+// Mode 2 only: get second-highest for payment amount
+const secondHandle = await contract.getSecondHighestBidHandle();
+
+// Request decryption — Threshold Network returns (plaintext, signature)
 const bidResult = await client
-  .decryptForTx(bidHandle)
-  .withoutPermit()
-  .execute();
-// Returns: { ctHash: euint64, decryptedValue: bigint, signature: bytes }
+  .decryptForTx(bidHandle).withoutPermit().execute();
 
-const bidderResult = await client
-  .decryptForTx(bidderHandle)
-  .withoutPermit()
-  .execute();
-// Returns: { ctHash: eaddress, decryptedValue: string, signature: bytes }
-
-// Step 3: Submit to contract — verified on-chain
+// Submit proof on-chain — FHE.publishDecryptResult verifies signature
+// REVERTS if signature is invalid or plaintext is wrong
 await contract.revealWinner(
-  bidResult.ctHash,    bidResult.decryptedValue,    bidResult.signature,
-  bidderResult.ctHash, bidderResult.decryptedValue, bidderResult.signature
+  bidResult.ctHash, bidResult.decryptedValue, bidResult.signature,
+  ...
 );
 ```
 
-### On-Chain Verification
+### Security Guarantee
 
-`FHE.publishDecryptResult(ctHash, plaintext, signature)` does the following:
-1. Looks up the ciphertext handle in the CoFHE registry
-2. Verifies the Threshold Network's signature: `verify(signature, ctHash, plaintext)`
-3. If valid: stores plaintext on-chain and marks handle as decrypted
-4. If invalid: **REVERTS** — the transaction is rejected
-
-This means the winner result is not self-reported by the caller. It is **cryptographically verified** by math on-chain.
+`FHE.publishDecryptResult()` verifies the Threshold Network signature on-chain. If anyone submits a fake plaintext, the signature will not match and the transaction reverts. The winner result is not self-reported — it is cryptographically proven.
 
 ---
 
-## 7. Privacy Guarantees — What Is and Isn't Hidden
+## 10. Privacy Guarantees Across All Modes
 
-### What Is Hidden
+### What Is Hidden in Every Mode
 
 | Data | During Auction | After Close | After Reveal |
 |---|---|---|---|
-| Your bid amount | ✅ Hidden | ✅ Hidden | Winning bid only |
-| Losing bid amounts | ✅ Hidden | ✅ Hidden | ✅ **Permanently hidden** |
-| Who is currently winning | ✅ Hidden | ✅ Hidden | Revealed at reveal |
-| Current highest bid value | ✅ Hidden | ✅ Hidden | Revealed at reveal |
+| Individual bid/ask amounts | ✅ Hidden | ✅ Hidden | Winning amount only |
+| Losing bid/ask amounts | ✅ Hidden | ✅ Hidden | **✅ Permanently hidden** |
+| Current winner/leader | ✅ Hidden | ✅ Hidden | Revealed at reveal |
+| Vickrey second-highest bid | ✅ Hidden | ✅ Hidden | Revealed as payment amount |
+| Dutch bidder thresholds | ✅ Hidden | ✅ Hidden | Winner's threshold only |
+| Encrypted reserve price | ✅ Hidden | ✅ Hidden | Never revealed |
 
-### What Is Public
+### The Permanent Seal Guarantee
 
-| Data | Visibility |
-|---|---|
-| Bidder wallet addresses | Public (on-chain event) |
-| Number of bids | Public (totalBids counter) |
-| Reserve price | Public (standard practice) |
-| Auction end time | Public |
-| Winner address + amount | Public after reveal |
+This is the critical property that other approaches miss.
 
-### The Losing Bid Guarantee
-
-This is the most important privacy property that other solutions miss.
-
-In commit-reveal: all bids revealed at the end. Losers' amounts are on-chain forever.
-In PrivaBid: `FHE.allowPublic()` is called ONLY on `highestBid` and `highestBidder`.
-
-The losing bids exist only as intermediate FHE operation outputs — ephemeral encrypted handles that were passed to `FHE.max()` and `FHE.select()` but never stored with `allowPublic()`. They are computationally indistinguishable from random data on-chain.
-
-Even a fully compromised Threshold Network cannot reveal losing bids — they were never marked as decryptable.
+After `closeBidding()`, only the winning handles have `FHE.allowPublic()` called on them. All other encrypted handles — every losing bid from every mode — exist as orphaned ciphertexts in the CoFHE registry. They were never granted a decryption key. Even a fully compromised Threshold Network cannot decrypt them, because they were never marked as decryptable.
 
 ---
 
-## 8. Gas Considerations
+## 11. Gas Considerations
 
-FHE operations are more expensive than standard EVM operations because:
-1. They require CoFHE coprocessor round-trips
-2. Encrypted operations work on large ciphertexts
-3. The ACL update is an on-chain write
+FHE operations are more expensive than standard EVM operations.
 
-### Approximate Gas Costs (Fhenix Testnet)
-
-| Operation | Approximate Gas |
+| Operation | Approx Gas |
 |---|---|
-| `FHE.asEuint64()` | ~50,000 gas |
-| `FHE.gt()` | ~80,000 gas |
-| `FHE.max()` | ~80,000 gas |
-| `FHE.select()` | ~80,000 gas |
-| `FHE.allowThis()` | ~20,000 gas |
-| Full `bid()` call | ~500,000–700,000 gas |
+| `FHE.asEuint64()` | ~50,000 |
+| `FHE.gt()` or `FHE.lt()` | ~80,000 |
+| `FHE.max()` or `FHE.min()` | ~80,000 |
+| `FHE.select()` | ~80,000 |
+| `FHE.allowThis()` | ~20,000 |
+| Full `bid()` — Mode 1 | ~500,000–700,000 |
+| Full `bid()` — Mode 2 (Vickrey) | ~800,000–1,000,000 |
 
-**Note:** Gas costs in mock/test environment are higher than production due to simulation overhead. Production CoFHE gas costs are being actively optimized by the Fhenix team.
+Vickrey mode costs more than Mode 1 because it runs an additional `FHE.gt` and a nested `FHE.select` per bid. This is the direct cost of the additional privacy guarantee — knowing which bid is second-highest without decrypting either value.
 
-### Optimization Strategy
-
-For Wave 3+, PrivaBid will implement:
-- Batch bid submission (multiple bids in one transaction)
-- Gas estimation helper for frontend bidders
-- Layer 2 deployment (Arbitrum Sepolia) to reduce absolute ETH cost
+Arbitrum Sepolia is the recommended deployment target — L2 gas costs reduce absolute ETH spend significantly.
 
 ---
 
-## 9. Security Model
+## 12. Security Model
 
-### What PrivaBid Trusts
+### Trust Assumptions
 
-| Component | Trust Level | Why |
+| Component | Trust Level | Reasoning |
 |---|---|---|
-| Fhenix CoFHE | High trust | Encrypted computation infrastructure |
-| Threshold Network | Distributed trust (≥T nodes) | Multi-party, no single point of failure |
-| Solidity EVM | Standard trust | Same as any smart contract |
-| Auctioneer | Limited — only can close | Cannot read bids, cannot manipulate outcome |
-| Bidders | Trustless | Interact with public interface only |
+| Fhenix CoFHE | High | Encrypted compute infrastructure |
+| Threshold Network | Distributed (≥T/N nodes) | MPC, no single point of failure |
+| Smart Contract (EVM) | Standard | Same as any Solidity contract |
+| Auctioneer | Limited (close only) | Cannot read bids, cannot manipulate outcome |
+| Bidders/Sellers | Trustless | Public interface only |
 
 ### Attack Vectors and Mitigations
 
-**Malicious Auctioneer**
-- Can close the auction early → Bidders lose their window, but bids are never exposed
-- Cannot read bids → FHE type system prevents it
-- Cannot manipulate winner → `revealWinner()` requires Threshold Network proof
+**Front-running bids** — Attacker sees `bid(5000)` in mempool but cannot read the amount (it is encrypted on arrival). Cannot intelligently outbid. FHE defeats this at the fundamental level.
 
-**Front-Running the Bid Transaction**
-- Attacker sees `bid(5000)` in mempool
-- Attacker submits `bid(5001)` with higher gas
-- **Mitigation:** This is *exactly* the attack FHE prevents — the attacker cannot see the bid amount (it's encrypted on arrival), so they cannot intelligently outbid
+**Fake winner submission** — Attacker calls `revealWinner()` with a fabricated result. `FHE.publishDecryptResult()` verifies the Threshold Network signature — invalid input reverts.
 
-**Fake Winner Submission**
-- Attacker calls `revealWinner()` with a fake address and amount
-- **Mitigation:** `FHE.publishDecryptResult()` verifies Threshold Network signature — invalid input reverts
+**Early decryption attempt** — Threshold Network nodes attempt to decrypt before `closeBidding()`. `FHE.allowPublic()` has not been called, so the ACL blocks the request.
 
-**Threshold Network Collusion**
-- ≥T nodes cooperate to decrypt winning bid early
-- **Mitigation:** `FHE.allowPublic()` is only called after close — before that, even the Threshold Network cannot decrypt (no permission registered in ACL)
-- After close, decryption of *winner* is intentional — that's the reveal mechanism
-- Losing bids remain undecryptable regardless of Threshold Network behavior
+**Malicious auctioneer** — Can close auction early, but cannot read any bids. Cannot manipulate the outcome — `revealWinner()` requires Threshold Network proof.
 
-**Re-entrancy**
-- No external calls are made from `bid()` or `closeBidding()`
-- State changes happen before any external interaction
-- Standard CEI (Checks-Effects-Interactions) pattern followed
+**Vickrey manipulation** — Auctioneer attempts to manipulate the second-highest bid to inflate payment. Both `highestBid` and `secondHighestBid` are revealed with separate Threshold Network signatures. Both must verify independently.
 
 ---
 
-*For the complete smart contract with annotations: [`contracts/PrivaBid.sol`](contracts/PrivaBid.sol)*
-
+*For the plain-English FHE explainer: [`FHE_EXPLAINER.md`](FHE_EXPLAINER.md)*
 *For the project overview: [`README.md`](README.md)*
