@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-heading: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-label: "Space Mono", ui-monospace, monospace;
+  --color-priva-bg: #0a0a0a;
+  --color-priva-surface: #0f0f0f;
+  --color-priva-footer: #080808;
+  --color-priva-accent: #00ff94;
+  --color-priva-blue: #89b4fa;
+  --color-priva-purple: #cba6f7;
+  --color-priva-border: #1a1a1a;
+  --color-priva-muted: #666666;
+  --color-priva-text: #f0f0f0;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(0, 255, 148, 0.35);
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow: 0 0 0 6px rgba(0, 255, 148, 0);
+  }
+}
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply m-0 min-h-dvh bg-priva-bg font-sans text-neutral-200;
+  }
+
+  #root {
+    @apply min-h-dvh;
+  }
+
+  code {
+    @apply rounded bg-slate-800 px-1 py-0.5 font-mono text-[0.8em] text-emerald-300/90;
+  }
+}
+
+/* @cofhe/react mounts a floating Fhenix launcher; this app uses WalletConnect + in-flow decrypt. */
+.fnx-floating-button {
+  display: none !important;
+}
