@@ -8,8 +8,9 @@
 import { expect }              from "chai";
 import { ethers }              from "hardhat";
 import { loadFixture, time }   from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { anyValue }            from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { PrivaBid }            from "../typechain-types";
-import { mock_expectPlaintext, createClientWithBatteries } from "cofhe-hardhat-plugin/utils";
+import { mock_expectPlaintext } from "cofhe-hardhat-plugin";
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 const Mode = { FIRST_PRICE: 0, VICKREY: 1, DUTCH: 2, REVERSE: 3 };
@@ -25,10 +26,9 @@ async function deployMode(mode: number, duration = ONE_HOUR) {
   const c = await F.deploy(
     mode, "Test Item", "Test description", RESERVE, duration,
     10_000n, 1_000n, 100   // dutch params (ignored for other modes)
-  ) as PrivaBid;
+  ) as unknown as PrivaBid;
   await c.waitForDeployment();
-  const client = await createClientWithBatteries(auctioneer);
-  return { c, auctioneer, b1, b2, b3, anyone, client };
+  return { c, auctioneer, b1, b2, b3, anyone };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ describe("2. First-Price Bidding", () => {
     const { c, b1 } = await deployMode(Mode.FIRST_PRICE);
     await expect(c.connect(b1).bid(5_000n))
       .to.emit(c, "BidPlaced")
-      .withArgs(b1.address, expect.anything(), 1);
+      .withArgs(b1.address, anyValue, 1);
     expect(await c.hasBid(b1.address)).to.equal(true);
     expect(await c.totalBids()).to.equal(1);
   });
@@ -135,7 +135,7 @@ describe("2. First-Price Bidding", () => {
     await c.connect(b3).bid(5_000n);
     await c.connect(auctioneer).closeBidding();
     const handle = await c.getHighestBidHandle();
-    await mock_expectPlaintext(ethers.provider, handle, 7_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), 7_000n);
   });
 
   it("FHE: highestBidder is encrypted and correct", async () => {
@@ -144,7 +144,7 @@ describe("2. First-Price Bidding", () => {
     await c.connect(b2).bid(9_000n);
     await c.connect(auctioneer).closeBidding();
     const handle = await c.getHighestBidderHandle();
-    await mock_expectPlaintext(ethers.provider, handle, b2.address);
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), BigInt(b2.address));
   });
 
   it("rejects getHighestBidHandle while auction is active", async () => {
@@ -178,8 +178,8 @@ describe("3. Vickrey Bidding", () => {
     await c.connect(b2).bid(7_000n);
     await c.connect(b3).bid(5_000n);
     await c.connect(auctioneer).closeBidding();
-    const h = await c.getHighestBidHandle();
-    await mock_expectPlaintext(ethers.provider, h, 7_000n);
+    const handle = await c.getHighestBidHandle();
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), 7_000n);
   });
 
   it("FHE: second-highest bid is correct — bidder wins but pays second amount", async () => {
@@ -191,7 +191,7 @@ describe("3. Vickrey Bidding", () => {
 
     // Second highest should be 5000 (b3), not 7000 (b2 won)
     const sh = await c.getSecondHighestBidHandle();
-    await mock_expectPlaintext(ethers.provider, sh, 5_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(sh), 5_000n);
   });
 
   it("FHE: second-highest updates correctly across multiple bids", async () => {
@@ -204,8 +204,8 @@ describe("3. Vickrey Bidding", () => {
     // highest = 9000, second = 6000
     const h  = await c.getHighestBidHandle();
     const sh = await c.getSecondHighestBidHandle();
-    await mock_expectPlaintext(ethers.provider, h,  9_000n);
-    await mock_expectPlaintext(ethers.provider, sh, 6_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(h),  9_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(sh), 6_000n);
   });
 
   it("getSecondHighestBidHandle reverts for non-VICKREY mode", async () => {
@@ -223,7 +223,7 @@ describe("4. Dutch Auction", () => {
     const { c, b1 } = await deployMode(Mode.DUTCH);
     await expect(c.connect(b1).setThreshold(5_000n))
       .to.emit(c, "ThresholdSet")
-      .withArgs(b1.address, expect.anything());
+      .withArgs(b1.address, anyValue);
     expect(await c.hasThreshold(b1.address)).to.equal(true);
   });
 
@@ -255,7 +255,7 @@ describe("4. Dutch Auction", () => {
     await c.connect(b1).setThreshold(5_000n);
     await c.connect(auctioneer).closeBidding();
     const handle = await c.getDutchThresholdHandle(b1.address);
-    await mock_expectPlaintext(ethers.provider, handle, 5_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), 5_000n);
   });
 });
 
@@ -268,7 +268,7 @@ describe("5. Reverse Auction", () => {
     // reservePrice = 1_000n = budget ceiling in REVERSE mode
     // Need a ceiling high enough — redeploy with higher ceiling
     const F = await ethers.getContractFactory("PrivaBid");
-    const rc = await F.deploy(Mode.REVERSE, "Service", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as PrivaBid;
+    const rc = await F.deploy(Mode.REVERSE, "Service", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as unknown as PrivaBid;
     await rc.waitForDeployment();
     await expect(rc.connect(b1).submitAsk(50_000n))
       .to.emit(rc, "AskSubmitted");
@@ -284,7 +284,7 @@ describe("5. Reverse Auction", () => {
   it("FHE: lowestAsk tracks the minimum ask correctly", async () => {
     const [auctioneer, b1, b2, b3] = await ethers.getSigners();
     const F  = await ethers.getContractFactory("PrivaBid");
-    const rc = await F.deploy(Mode.REVERSE, "Procurement", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as PrivaBid;
+    const rc = await F.deploy(Mode.REVERSE, "Procurement", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as unknown as PrivaBid;
     await rc.waitForDeployment();
 
     await rc.connect(b1).submitAsk(70_000n);
@@ -293,13 +293,13 @@ describe("5. Reverse Auction", () => {
 
     await rc.connect(auctioneer).closeBidding();
     const handle = await rc.getLowestAskHandle();
-    await mock_expectPlaintext(ethers.provider, handle, 40_000n);
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), 40_000n);
   });
 
   it("FHE: lowestSeller is the correct vendor", async () => {
     const [auctioneer, b1, b2] = await ethers.getSigners();
     const F  = await ethers.getContractFactory("PrivaBid");
-    const rc = await F.deploy(Mode.REVERSE, "Procurement", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as PrivaBid;
+    const rc = await F.deploy(Mode.REVERSE, "Procurement", "desc", 100_000n, ONE_HOUR, 0n, 0n, 0) as unknown as PrivaBid;
     await rc.waitForDeployment();
 
     await rc.connect(b1).submitAsk(80_000n);
@@ -307,7 +307,7 @@ describe("5. Reverse Auction", () => {
     await rc.connect(auctioneer).closeBidding();
 
     const handle = await rc.getLowestSellerHandle();
-    await mock_expectPlaintext(ethers.provider, handle, b2.address);
+    await mock_expectPlaintext(ethers.provider, BigInt(handle), BigInt(b2.address));
   });
 });
 
@@ -331,7 +331,7 @@ describe("6. Access Control", () => {
   it("rejects revealWinner before close", async () => {
     const { c } = await deployMode(Mode.FIRST_PRICE);
     await expect(c.revealWinner(
-      0n, 0n, "0x", "0x0000000000000000000000000000000000000000", ethers.ZeroAddress, "0x"
+      "0x", 0n, "0x", "0x", ethers.ZeroAddress, "0x"
     )).to.be.revertedWithCustomError(c, "AuctionNotClosed");
   });
 
@@ -340,7 +340,7 @@ describe("6. Access Control", () => {
     await c.connect(b1).bid(5_000n);
     await c.connect(auctioneer).closeBidding();
     await expect(c.revealWinner(
-      0n, 0n, "0x", "0x0000000000000000000000000000000000000000", ethers.ZeroAddress, "0x"
+      "0x", 0n, "0x", "0x", ethers.ZeroAddress, "0x"
     )).to.be.reverted;
   });
 

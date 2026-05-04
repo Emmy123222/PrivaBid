@@ -27,6 +27,13 @@ const MODES: {
       "Price falls on-chain while acceptances are encrypted; first valid match against the threshold wins.",
     fheTags: ["FHE.lte", "FHE.add", "FHE.select", "threshold decrypt"],
   },
+  {
+    path: "/reverse-auction",
+    title: "Reverse Auction (Procurement)",
+    description:
+      "Buyers seek lowest price from vendors. Encrypted asks compete for procurement contracts with budget ceiling.",
+    fheTags: ["FHE.encrypt", "FHE.min", "FHE.lt", "procurement"],
+  },
 ];
 
 function LiveBadge() {
@@ -50,14 +57,14 @@ export default function Home() {
           ← Landing
         </Link>
         <p className="mt-6 font-label text-xs uppercase tracking-[0.2em] text-[#00FF94]/80">
-          Wave 2 · CoFHE
+          Wave 3 · CoFHE + Reverse Auctions
         </p>
         <h1 className="mt-3 font-heading text-4xl font-bold leading-tight text-white md:text-5xl">
           Choose your
           <span className="text-[#00FF94]"> auction mode</span>
         </h1>
         <p className="mt-4 max-w-2xl font-label text-sm text-neutral-500 md:text-base">
-          All three modes are live on Arbitrum Sepolia. Pick a flow to place bids,
+          All four modes are live on Arbitrum Sepolia. Pick a flow to place bids,
           decrypt outcomes, and verify winners without leaking competing values early.
         </p>
 
@@ -80,9 +87,18 @@ export default function Home() {
               your amount and submit (encrypted bid or Dutch threshold).
             </li>
           </ol>
+          <div className="mt-4 pt-3 border-t border-[#00FF94]/20">
+            <Link
+              to="/create"
+              className="inline-flex items-center gap-2 font-label text-sm font-semibold text-[#00FF94] hover:text-[#00FF94]/80"
+            >
+              <span>🏭</span>
+              Create your own auction
+            </Link>
+          </div>
         </div>
 
-        <ul className="mt-12 grid gap-6 md:grid-cols-3">
+        <ul className="mt-12 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
           {MODES.map(({ path, title, description, fheTags }) => (
             <li key={path}>
               <article className="group flex h-full flex-col rounded-2xl border border-neutral-800 bg-neutral-950/60 p-6 shadow-lg transition-colors duration-200 hover:border-[#00FF94]/70">
@@ -107,10 +123,10 @@ export default function Home() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigate(`${path}#place-your-bid`)}
+                  onClick={() => navigate(`${path}${path === "/reverse-auction" ? "#submit-your-ask" : "#place-your-bid"}`)}
                   className="mt-6 w-full rounded-xl bg-[#00FF94] py-3 font-label text-sm font-semibold uppercase tracking-wide text-neutral-950 transition hover:bg-[#00FF94]/90"
                 >
-                  Enter auction to bid
+                  {path === "/reverse-auction" ? "Enter auction to submit ask" : "Enter auction to bid"}
                 </button>
               </article>
             </li>

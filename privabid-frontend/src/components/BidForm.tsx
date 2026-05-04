@@ -22,11 +22,13 @@ const UINT64_MAX = 18446744073709551615n;
 const BIDFORM_READ_ABI = [
   "function reservePrice() view returns (uint64)",
   "function floorPrice() view returns (uint64)",
+  "function budgetCeiling() view returns (uint64)",
 ] as const;
 
 const BIDFORM_WRITE_ABI = [
   "function bid(uint64 amount)",
   "function setThreshold(uint64 threshold)",
+  "function submitAsk(uint64 amount)",
 ] as const;
 
 /** Standalone PrivaBidDutch — preflight before `setThreshold` (avoids opaque L2 estimateGas). */
@@ -35,7 +37,7 @@ const DUTCH_PREFLIGHT_ABI = [
   "function hasThreshold(address bidder) view returns (bool)",
 ] as const;
 
-export type BidFormMode = "first-price" | "vickrey" | "dutch";
+export type BidFormMode = "first-price" | "vickrey" | "dutch" | "reverse";
 
 export type BidFormProps = {
   mode: BidFormMode;
@@ -66,7 +68,9 @@ function isBelowReserveError(e: unknown): boolean {
   return (
     msg.includes("BelowReservePrice") ||
     msg.includes("Below reserve") ||
-    msg.includes("below reserve")
+    msg.includes("below reserve") ||
+    msg.includes("AboveBudget") ||
+    msg.includes("above budget")
   );
 }
 
@@ -91,6 +95,13 @@ function reserveViolationMessage(
   reserveMicro: bigint | null,
   mode: BidFormMode,
 ): string {
+  if (mode === "reverse") {
+    if (reserveMicro !== null && reserveMicro > 0n) {
+      const f = formatUsdc6(reserveMicro);
+      return `Ask must be below budget ceiling of ${f} USDC.`;
+    }
+    return "Ask must be below budget ceiling.";
+  }
   if (mode !== "dutch") {
     return "Minimum bid is 1";
   }
@@ -158,7 +169,9 @@ export default function BidForm({
       const raw =
         mode === "dutch"
           ? await read.floorPrice()
-          : await read.reservePrice();
+          : mode === "reverse"
+            ? await read.budgetCeiling()
+            : await read.reservePrice();
       setReserveMicro(BigInt(raw.toString()));
     } catch {
       setReserveMicro(null);
@@ -215,7 +228,7 @@ export default function BidForm({
       setErrorMessage("Amount must be greater than zero.");
       return;
     }
-    if (mode !== "dutch" && micro < 1_000_000n) {
+    if (mode !== "dutch" && mode !== "reverse" && micro < 1_000_000n) {
       setPhase("error");
       setErrorTone("reserve");
       setErrorMessage("Minimum bid is 1");
@@ -228,7 +241,15 @@ export default function BidForm({
       return;
     }
 
-    if (reserveMicro !== null && micro < reserveMicro) {
+    if (mode === "reverse") {
+      // For reverse auctions, ask must be below budget ceiling
+      if (reserveMicro !== null && micro > reserveMicro) {
+        setPhase("error");
+        setErrorTone("reserve");
+        setErrorMessage(reserveViolationMessage(reserveMicro, mode));
+        return;
+      }
+    } else if (reserveMicro !== null && micro < reserveMicro) {
       setPhase("error");
       setErrorTone("reserve");
       setErrorMessage(reserveViolationMessage(reserveMicro, mode));
@@ -304,6 +325,13 @@ export default function BidForm({
         setSuccessHint(
           "You will win automatically if price reaches your floor.",
         );
+      } else if (mode === "reverse") {
+        const tx = await (contract as Contract).submitAsk(micro);
+        await tx.wait();
+        setPhase("success");
+        setSuccessHint(
+          "Your ask is encrypted.\nNo vendor can see competing asks.",
+        );
       } else {
         const tx = await (contract as Contract).bid(micro);
         await tx.wait();
@@ -333,10 +361,15 @@ export default function BidForm({
   };
 
   const isDutch = mode === "dutch";
-  const minLabel =
-    reserveMicro !== null
-      ? `Minimum: ${formatUsdc6(reserveMicro)} USDC`
-      : "Minimum: …";
+  const isReverse = mode === "reverse";
+  const minLabel = 
+    isReverse && reserveMicro !== null
+      ? `Maximum: ${formatUsdc6(reserveMicro)} USDC`
+      : reserveMicro !== null
+        ? `Minimum: ${formatUsdc6(reserveMicro)} USDC`
+        : isReverse
+          ? "Maximum: …"
+          : "Minimum: …";
 
   return (
     <div className="space-y-3">
@@ -370,7 +403,11 @@ export default function BidForm({
       )}
 
       <label className="block font-label text-[10px] uppercase tracking-wider text-neutral-500">
-        {isDutch ? "Your Price Floor (USDC)" : "Your Bid (USDC)"}
+        {isDutch 
+          ? "Your Price Floor (USDC)" 
+          : isReverse 
+            ? "Your Ask Price (USDC)"
+            : "Your Bid (USDC)"}
       </label>
       <input
         type="text"
@@ -402,19 +439,31 @@ export default function BidForm({
         </p>
       )}
 
+      {isReverse && (
+        <p className="font-label text-xs leading-relaxed text-neutral-400">
+          Submit the lowest price you will accept. No vendor can see competing asks.
+        </p>
+      )}
+
       {(phase === "working" || networkPrompting) && (
         <p className="font-label text-xs text-[#00FF94]">
           {networkPrompting
             ? "Confirm network in MetaMask…"
             : isDutch
               ? "Encrypting threshold..."
-              : "Encrypting bid..."}
+              : isReverse
+                ? "Encrypting ask..."
+                : "Encrypting bid..."}
         </p>
       )}
 
       {phase === "success" && (
         <p className="font-label text-xs text-emerald-400">
-          {isDutch ? "Threshold sealed ✓" : "Bid sealed on-chain ✓"}
+          {isDutch 
+            ? "Threshold sealed ✓" 
+            : isReverse 
+              ? "Ask sealed on-chain ✓"
+              : "Bid sealed on-chain ✓"}
         </p>
       )}
 
@@ -448,7 +497,11 @@ export default function BidForm({
         onClick={() => void submit()}
         className="w-full rounded-xl bg-[#00FF94] py-2.5 font-label text-xs font-semibold uppercase tracking-wide text-neutral-950 hover:bg-[#00FF94]/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {isDutch ? "Set Encrypted Threshold" : "Submit Encrypted Bid"}
+        {isDutch 
+          ? "Set Encrypted Threshold" 
+          : isReverse 
+            ? "Submit Encrypted Ask"
+            : "Submit Encrypted Bid"}
       </button>
     </div>
   );

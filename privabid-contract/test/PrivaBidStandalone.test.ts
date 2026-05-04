@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
-import { mock_expectPlaintext } from "cofhe-hardhat-plugin/utils";
+import { mock_expectPlaintext } from "cofhe-hardhat-plugin";
 import { PrivaBidDutch, PrivaBidVickrey } from "../typechain-types";
 
 const ONE_HOUR = 3600;
@@ -14,7 +14,7 @@ async function deployVickreyFixture() {
     "Standalone Vickrey auction",
     1_000n,
     ONE_HOUR
-  ) as PrivaBidVickrey;
+  ) as unknown as PrivaBidVickrey;
   await contract.waitForDeployment();
 
   return { contract, auctioneer, bidder1, bidder2, bidder3 };
@@ -28,7 +28,7 @@ async function deployDutchFixture() {
     1_000n,
     1_000n,
     10
-  ) as PrivaBidDutch;
+  ) as unknown as PrivaBidDutch;
   await contract.waitForDeployment();
 
   return { contract, auctioneer, bidder1, bidder2 };
@@ -49,13 +49,13 @@ describe("Standalone PrivaBid contracts (CoFHE mock)", () => {
       const hSecond = await contract.getSecondHighestBidHandle();
       const hBidder = await contract.getHighestBidderHandle();
 
-      await mock_expectPlaintext(ethers.provider, hHigh, 7_000n);
-      await mock_expectPlaintext(ethers.provider, hSecond, 5_000n);
-      await mock_expectPlaintext(ethers.provider, hBidder, bidder2.address);
+      await mock_expectPlaintext(ethers.provider, BigInt(hHigh), 7_000n);
+      await mock_expectPlaintext(ethers.provider, BigInt(hSecond), 5_000n);
+      await mock_expectPlaintext(ethers.provider, BigInt(hBidder), BigInt(bidder2.address));
 
       let secondWas7000 = false;
       try {
-        await mock_expectPlaintext(ethers.provider, hSecond, 7_000n);
+        await mock_expectPlaintext(ethers.provider, BigInt(hSecond), 7_000n);
         secondWas7000 = true;
       } catch {
         /* expected: second-highest is 5000, not 7000 */
@@ -92,7 +92,7 @@ describe("Standalone PrivaBid contracts (CoFHE mock)", () => {
       expect(await contract.winningBidder()).to.equal(ethers.ZeroAddress);
       expect(
         contract.interface.fragments.some(
-          (fragment) => fragment.type === "function" && fragment.name === "getBidHandle"
+          (fragment: any) => fragment.type === "function" && fragment.name === "getBidHandle"
         )
       ).to.equal(false);
     });
@@ -133,13 +133,13 @@ describe("Standalone PrivaBid contracts (CoFHE mock)", () => {
 
       await mock_expectPlaintext(
         ethers.provider,
-        await contract.getMatchResultHandle(bidder1.address),
-        true
+        BigInt(await contract.getMatchResultHandle(bidder1.address)),
+        1n
       );
       await mock_expectPlaintext(
         ethers.provider,
-        await contract.getMatchResultHandle(bidder2.address),
-        false
+        BigInt(await contract.getMatchResultHandle(bidder2.address)),
+        0n
       );
 
       await ethers.provider.send("hardhat_mine", ["0x14"]);
@@ -149,8 +149,8 @@ describe("Standalone PrivaBid contracts (CoFHE mock)", () => {
 
       await mock_expectPlaintext(
         ethers.provider,
-        await contract.getMatchResultHandle(bidder2.address),
-        true
+        BigInt(await contract.getMatchResultHandle(bidder2.address)),
+        1n
       );
     });
 
@@ -162,7 +162,7 @@ describe("Standalone PrivaBid contracts (CoFHE mock)", () => {
 
       await mock_expectPlaintext(
         ethers.provider,
-        await contract.getDutchThresholdHandle(bidder1.address),
+        BigInt(await contract.getDutchThresholdHandle(bidder1.address)),
         6_000n
       );
 

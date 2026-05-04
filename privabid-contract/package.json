@@ -10,6 +10,8 @@
     "deploy:arb": "hardhat run scripts/deploy.ts --network arb-sepolia",
     "deploy:vickrey": "hardhat run scripts/deployVickrey.ts --network arb-sepolia",
     "deploy:dutch": "hardhat run scripts/deployDutch.ts --network arb-sepolia",
+    "deploy:reverse": "hardhat run scripts/deploy-reverse.ts --network arb-sepolia",
+    "deploy:factory": "hardhat run scripts/deploy-factory.ts --network arb-sepolia",
     "deploy:eth": "hardhat run scripts/deploy.ts --network eth-sepolia",
     "clean": "hardhat clean"
   },
@@ -23,7 +25,7 @@
     "@types/chai": "^4.3.0",
     "@types/node": "^20.0.0",
     "chai": "^4.3.0",
-    "cofhe-hardhat-plugin": "^0.1.4",
+    "cofhe-hardhat-plugin": "^0.3.1",
     "dotenv": "^16.0.0",
     "hardhat": "^2.22.0",
     "ts-node": "^10.0.0",
