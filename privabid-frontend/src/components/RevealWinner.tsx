@@ -13,6 +13,7 @@ import {
   useCofhePublicClient,
   useCofheWalletClient,
 } from "@cofhe/react";
+import { ReineiraSDK } from "@reineira-os/sdk";
 import { createBrowserProvider, getReadOnlyRpcProvider } from "../lib/browserProvider";
 import { getTrustedMetaMaskProvider } from "../lib/metamask";
 import {
@@ -24,7 +25,7 @@ import {
 const ZERO = "0x0000000000000000000000000000000000000000";
 const UINT64_MASK = (1n << 64n) - 1n;
 
-export type RevealWinnerMode = "first-price" | "vickrey" | "dutch";
+export type RevealWinnerMode = "first-price" | "vickrey" | "dutch" | "reverse";
 
 export type RevealWinnerProps = {
   mode: RevealWinnerMode;
@@ -112,8 +113,51 @@ export default function RevealWinner({
   const [winnerAddr, setWinnerAddr] = useState<string | null>(null);
   const [winningBidUsdc, setWinningBidUsdc] = useState<string | null>(null);
   const [paymentUsdc, setPaymentUsdc] = useState<string | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<"idle" | "processing" | "complete" | "error">("idle");
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   const readProvider = useMemo(() => getReadOnlyRpcProvider(), []);
+
+  const processPayment = async () => {
+    if (!winnerAddr || !winningBidUsdc) return;
+    
+    setPaymentStatus("processing");
+    setPaymentError(null);
+    
+    try {
+      const mm = await getTrustedMetaMaskProvider();
+      if (!mm) {
+        throw new Error("MetaMask not available");
+      }
+      
+      const browser = createBrowserProvider(mm);
+      const signer = await browser.getSigner();
+      const sdk = ReineiraSDK.create({ 
+        network: "testnet", 
+        signer 
+      });
+      
+      // Initialize the SDK
+      await sdk.initialize();
+      
+      // Convert USDC amount to proper format (6 decimals)
+      const amount = sdk.usdc(parseFloat(winningBidUsdc));
+      
+      // Create escrow for the winner
+      const escrow = await sdk.escrow.create({
+        amount: amount,
+        owner: winnerAddr,
+      });
+      
+      // Fund the escrow
+      await escrow.fund(amount, { autoApprove: true });
+      
+      setPaymentStatus("complete");
+    } catch (e: any) {
+      setPaymentStatus("error");
+      setPaymentError(e?.message || "Payment failed");
+    }
+  };
 
   const reveal = async () => {
     setError(null);
@@ -121,6 +165,8 @@ export default function RevealWinner({
     setWinnerAddr(null);
     setWinningBidUsdc(null);
     setPaymentUsdc(null);
+    setPaymentStatus("idle");
+    setPaymentError(null);
 
     if (isZeroAddr(contractAddress)) {
       setError("No contract configured.");
@@ -153,7 +199,9 @@ export default function RevealWinner({
           ? FIRST_PRICE_REVEAL_ABI
           : mode === "vickrey"
             ? VICKREY_REVEAL_ABI
-            : DUTCH_REVEAL_ABI,
+            : mode === "reverse"
+              ? FIRST_PRICE_REVEAL_ABI // PrivaBidReverse uses same ABI pattern as first-price
+              : DUTCH_REVEAL_ABI,
         readProvider,
       ) as Contract;
 
@@ -165,7 +213,9 @@ export default function RevealWinner({
           ? FIRST_PRICE_REVEAL_ABI
           : mode === "vickrey"
             ? VICKREY_REVEAL_ABI
-            : DUTCH_REVEAL_ABI,
+            : mode === "reverse"
+              ? FIRST_PRICE_REVEAL_ABI // PrivaBidReverse uses same ABI pattern as first-price
+              : DUTCH_REVEAL_ABI,
         signer,
       ) as Contract;
 
@@ -209,8 +259,16 @@ export default function RevealWinner({
         return;
       }
 
-      const bidHandle = normHandle(await read.getHighestBidHandle());
-      const bidderHandle = normHandle(await read.getHighestBidderHandle());
+      const bidHandle = normHandle(
+        mode === "reverse" 
+          ? await read.getLowestAskHandle()
+          : await read.getHighestBidHandle()
+      );
+      const bidderHandle = normHandle(
+        mode === "reverse"
+          ? await read.getLowestSellerHandle()
+          : await read.getHighestBidderHandle()
+      );
       const secondHandle =
         mode === "vickrey"
           ? normHandle(await read.getSecondHighestBidHandle())
@@ -378,13 +436,13 @@ export default function RevealWinner({
       {done && winnerAddr && winningBidUsdc && (
         <div className="rounded-xl border border-[#00FF94]/30 bg-[#00FF94]/5 p-4">
           <p className="font-heading text-sm text-white">
-            🏆 Winner:{" "}
+            🏆 {mode === "reverse" ? "Winning Vendor" : "Winner"}:{" "}
             <span className="font-mono text-[#00FF94]">
               {truncateAddr(winnerAddr)}
             </span>
           </p>
           <p className="mt-2 font-label text-sm text-neutral-200">
-            Winning Bid:{" "}
+            {mode === "reverse" ? "Winning Ask" : "Winning Bid"}:{" "}
             <span className="text-[#00FF94]">
               {Number(winningBidUsdc).toLocaleString(undefined, {
                 maximumFractionDigits: 2,
@@ -404,8 +462,51 @@ export default function RevealWinner({
             </p>
           )}
           <p className="mt-3 font-label text-[11px] text-neutral-500">
-            All losing bids permanently sealed
+            {mode === "reverse" 
+              ? "All competing asks permanently sealed" 
+              : "All losing bids permanently sealed"}
           </p>
+          
+          {paymentStatus === "idle" && (
+            <button
+              type="button"
+              onClick={() => void processPayment()}
+              className="mt-4 w-full rounded-xl border border-sky-500/50 py-2.5 font-label text-xs font-semibold uppercase tracking-wide text-sky-400 hover:bg-sky-500/10"
+            >
+              Process Payment via Reineira
+            </button>
+          )}
+          
+          {paymentStatus === "processing" && (
+            <div className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+              <p className="font-label text-sm text-sky-400">
+                Processing confidential payment...
+              </p>
+            </div>
+          )}
+          
+          {paymentStatus === "complete" && (
+            <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+              <p className="font-label text-sm text-emerald-400">
+                Payment complete ✓ — settled via Reineira
+              </p>
+            </div>
+          )}
+          
+          {paymentStatus === "error" && paymentError && (
+            <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+              <p className="font-label text-sm text-red-400">
+                Payment failed: {paymentError}
+              </p>
+              <button
+                type="button"
+                onClick={() => void processPayment()}
+                className="mt-2 rounded-lg border border-red-500/50 px-3 py-1 font-label text-xs text-red-400 hover:bg-red-500/10"
+              >
+                Retry Payment
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

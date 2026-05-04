@@ -2,6 +2,8 @@ import { BrowserRouter, Link, Outlet, Route, Routes } from "react-router-dom";
 import WalletConnect from "./components/WalletConnect";
 import { CHAIN_ID } from "./config/contracts";
 import AuctionPage from "./pages/AuctionPage";
+import CreateAuction from "./pages/CreateAuction";
+import ReverseAuctionPage from "./pages/ReverseAuctionPage";
 import Home from "./pages/Home";
 import Landing from "./pages/Landing";
 
@@ -36,7 +38,9 @@ export default function App() {
           <Route path="/" element={<Landing />} />
           <Route element={<AppLayout />}>
             <Route path="/home" element={<Home />} />
+            <Route path="/create" element={<CreateAuction />} />
             <Route path="/auction/:mode" element={<AuctionPage />} />
+            <Route path="/reverse-auction" element={<ReverseAuctionPage />} />
           </Route>
         </Routes>
       </div>

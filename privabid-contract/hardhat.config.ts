@@ -14,17 +14,17 @@ const config: HardhatUserConfig = {
   solidity: {
     compilers: [
       {
-        version: "0.8.19",
-        settings: {
-          optimizer: { enabled: true, runs: 200 },
-          evmVersion: "paris", // required for Fhenix CoFHE compatibility
-        },
-      },
-      {
         version: "0.8.25",
         settings: {
           optimizer: { enabled: true, runs: 200 },
-          evmVersion: "cancun", // for newer OpenZeppelin contracts
+          evmVersion: "cancun", 
+        },
+      },
+      {
+        version: "0.8.19",
+        settings: {
+          optimizer: { enabled: true, runs: 200 },
+          evmVersion: "paris", 
         },
       }
     ]

@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { Contract, formatUnits } from "ethers";
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import {
   createBrowserProvider,
   getReadOnlyRpcProvider,
@@ -65,6 +65,11 @@ function blocksUntilNextDrop(
   return nextBoundary - currentBlock;
 }
 
+function truncateAddr(a: string): string {
+  if (!a || a.length < 10) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
 function formatUsdcLabel(micro: bigint): string {
   const s = formatUnits(micro, 6);
   const n = Number(s);
@@ -90,6 +95,7 @@ export default function DutchPriceTracker({
   const [blocksToDrop, setBlocksToDrop] = useState<bigint | null>(null);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [winnerHighlight, setWinnerHighlight] = useState(false);
+  const [winner, setWinner] = useState<{ address: string; amount: string } | null>(null);
 
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -181,9 +187,15 @@ export default function DutchPriceTracker({
         const browser = createBrowserProvider(mm);
         live = new Contract(contractAddress, abi, browser);
         if (cancelled || !live) return;
-        live.on("WinnerRevealed", () => {
+        live.on("WinnerRevealed", (winnerAddr: string, amount: bigint) => {
           if (highlightTimer.current) clearTimeout(highlightTimer.current);
-          startTransition(() => setWinnerHighlight(true));
+          startTransition(() => {
+            setWinnerHighlight(true);
+            setWinner({ 
+              address: winnerAddr, 
+              amount: formatUnits(amount, 6) 
+            });
+          });
           highlightTimer.current = setTimeout(() => {
             startTransition(() => setWinnerHighlight(false));
             highlightTimer.current = null;
@@ -231,35 +243,38 @@ export default function DutchPriceTracker({
         · every 5s
       </p>
 
+      {/* PRICE DISPLAY */}
       <p className="mt-4 font-heading text-3xl font-bold tracking-tight text-[#00FF94] md:text-4xl">
-        Current Price: {currentLabel} USDC
+        Current Price: {currentLabel}
       </p>
 
+      {/* THREE STAT CARDS */}
       <dl className="mt-6 grid gap-3 font-label text-sm sm:grid-cols-3">
         <div className="rounded-xl border border-neutral-800 bg-priva-bg/80 px-3 py-3">
           <dt className="text-[10px] uppercase tracking-wider text-neutral-500">
             Start price
           </dt>
-          <dd className="mt-1 text-lg text-white">{startLabel} USDC</dd>
+          <dd className="mt-1 text-lg text-white">{startLabel}</dd>
         </div>
         <div className="rounded-xl border border-neutral-800 bg-priva-bg/80 px-3 py-3">
           <dt className="text-[10px] uppercase tracking-wider text-neutral-500">
             Current price
           </dt>
-          <dd className="mt-1 text-lg text-[#00FF94]">{currentLabel} USDC</dd>
+          <dd className="mt-1 text-lg text-[#00FF94]">{currentLabel}</dd>
         </div>
         <div className="rounded-xl border border-neutral-800 bg-priva-bg/80 px-3 py-3">
           <dt className="text-[10px] uppercase tracking-wider text-neutral-500">
             Floor price
           </dt>
-          <dd className="mt-1 text-lg text-white">{floorLabel} USDC</dd>
+          <dd className="mt-1 text-lg text-white">{floorLabel}</dd>
         </div>
       </dl>
 
+      {/* BLOCKS UNTIL NEXT DROP */}
       <div className="mt-4 rounded-xl border border-neutral-800 bg-[#0a0a0a] px-3 py-2 font-label text-xs text-neutral-400">
         {blocksLeft !== null && intervalBlocks !== null && headBlock !== null ? (
           <>
-            <span className="text-neutral-300">Next price drop:</span>{" "}
+            <span className="text-neutral-300">Next price drop in:</span>{" "}
             <span className="text-white">
               {blocksLeft} block{blocksLeft === 1 ? "" : "s"}
             </span>
@@ -281,12 +296,21 @@ export default function DutchPriceTracker({
         )}
       </div>
 
-      {winnerHighlight && (
-        <p className="mt-3 font-label text-xs font-semibold text-[#00FF94]">
-          Winner revealed — threshold match settled on-chain
-        </p>
+      {/* WINNER DETECTION BANNER */}
+      {winner && (
+        <div className="mt-3 rounded-xl border border-[#00FF94]/30 bg-[#00FF94]/5 p-3">
+          <p className="font-label text-sm font-semibold text-[#00FF94]">
+            🏆 Auction matched! Winner: {truncateAddr(winner.address)}
+          </p>
+          <p className="mt-1 font-label text-xs text-neutral-300">
+            Amount: {Number(winner.amount).toLocaleString(undefined, {
+              maximumFractionDigits: 2,
+            })} USDC
+          </p>
+        </div>
       )}
 
+      {/* DESCENDING PRICE CHART */}
       <div className="mt-6 h-56 w-full rounded-xl border border-neutral-800 bg-[#0a0a0a] p-2">
         {chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center font-label text-xs text-neutral-600">
@@ -325,6 +349,15 @@ export default function DutchPriceTracker({
                   fill: "#737373",
                   fontSize: 10,
                 }}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#0a0a0a",
+                  border: "1px solid #404040",
+                  borderRadius: "8px",
+                  fontSize: "12px",
+                }}
+                labelStyle={{ color: "#a3a3a3" }}
               />
               <Line
                 type="monotone"

@@ -19,6 +19,16 @@ export const CONTRACTS = {
     network: "Arbitrum Sepolia",
     chainId: 421614,
   },
+  REVERSE: {
+    address: "0x291DD038A12eD7eaaB383751cA4841e6D1B3434b" as const,
+    network: "Arbitrum Sepolia",
+    chainId: 421614,
+  },
+  FACTORY: {
+    address: "0x16027C8826BFcef3Ad71C8be56b49eC6BE1e0054" as const,
+    network: "Arbitrum Sepolia",
+    chainId: 421614,
+  },
 } as const;
 
 export const CHAIN_ID = 421614;
