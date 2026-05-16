@@ -5,7 +5,7 @@
 
 export const CONTRACTS = {
   FIRST_PRICE: {
-    address: "0x83F0D8049730e4AD6b4b4586f322c85CA9D7Ca3a" as const,
+    address: "0xCD105F5853abac7a95a1BfaF56d673E32aC1D25C" as const,
     network: "Arbitrum Sepolia",
     chainId: 421614,
   },
@@ -15,12 +15,12 @@ export const CONTRACTS = {
     chainId: 421614,
   },
   DUTCH: {
-    address: "0xd34b656D608699136404B193F20f8282a3B22028" as const,
+    address: "0xab016ADDf7097D77652C712310c7a24F8EAFC913" as const,
     network: "Arbitrum Sepolia",
     chainId: 421614,
   },
   REVERSE: {
-    address: "0x291DD038A12eD7eaaB383751cA4841e6D1B3434b" as const,
+    address: "0xFa038951671e0bE59F2acA05Ca52e37bc6081Ffc" as const,
     network: "Arbitrum Sepolia",
     chainId: 421614,
   },
@@ -29,7 +29,28 @@ export const CONTRACTS = {
     network: "Arbitrum Sepolia",
     chainId: 421614,
   },
+  /** Wave 4 — PrivaBidFactoryV2 (set VITE_FACTORY_V2_ADDRESS after deploy). */
+  FACTORY_V2: {
+    address: (import.meta.env.VITE_FACTORY_V2_ADDRESS?.trim() ||
+      "0x7ED138dE78f24fEde79eB54F6DddEA38D3db2339") as `0x${string}`,
+    network: "Arbitrum Sepolia",
+    chainId: 421614,
+  },
+  /** Judge demo auction (set VITE_DEMO_AUCTION_ADDRESS after deploy:demo). */
+  DEMO_AUCTION: {
+    address: (import.meta.env.VITE_DEMO_AUCTION_ADDRESS?.trim() ||
+      "0xf96F8611Fa57d75398eaa4e410e953586acf6533") as `0x${string}`,
+    network: "Arbitrum Sepolia",
+    chainId: 421614,
+  },
 } as const;
+
+/** Prefer V2 factory when deployed. */
+export function activeFactoryAddress(): string {
+  const v2 = CONTRACTS.FACTORY_V2.address;
+  if (v2 && v2 !== "0x0000000000000000000000000000000000000000") return v2;
+  return CONTRACTS.FACTORY.address;
+}
 
 export const CHAIN_ID = 421614;
 

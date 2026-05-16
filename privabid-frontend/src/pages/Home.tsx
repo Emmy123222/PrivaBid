@@ -1,4 +1,12 @@
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { CONTRACTS } from "../config/contracts";
+import {
+  factoryAuctionLink,
+  fetchLatestFactoryAuctions,
+  type FactoryAuctionRow,
+} from "../lib/factoryAuctions";
+import { auctionHref, loadMyAuctions, type SavedAuction } from "../lib/myAuctions";
 
 const MODES: {
   path: string;
@@ -44,8 +52,49 @@ function LiveBadge() {
   );
 }
 
+const MODE_LABEL: Record<FactoryAuctionRow["mode"], string> = {
+  "first-price": "First-price",
+  vickrey: "Vickrey",
+  dutch: "Dutch",
+  reverse: "Reverse",
+};
+
 export default function Home() {
   const navigate = useNavigate();
+  const [myAuctions] = useState<SavedAuction[]>(() => loadMyAuctions());
+  const [factoryAuctions, setFactoryAuctions] = useState<FactoryAuctionRow[]>(
+    [],
+  );
+  const [factoryLoading, setFactoryLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setFactoryLoading(true);
+      const v1 = await fetchLatestFactoryAuctions(24, CONTRACTS.FACTORY.address);
+      const v2Addr = CONTRACTS.FACTORY_V2.address;
+      const v2 =
+        v2Addr &&
+        v2Addr !== "0x0000000000000000000000000000000000000000"
+          ? await fetchLatestFactoryAuctions(24, v2Addr)
+          : [];
+      const seen = new Set<string>();
+      const rows: FactoryAuctionRow[] = [];
+      for (const r of [...v2, ...v1]) {
+        const k = r.address.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        rows.push(r);
+      }
+      if (!cancelled) {
+        setFactoryAuctions(rows);
+        setFactoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="bg-priva-bg text-neutral-200">
@@ -57,7 +106,7 @@ export default function Home() {
           ← Landing
         </Link>
         <p className="mt-6 font-label text-xs uppercase tracking-[0.2em] text-[#00FF94]/80">
-          Wave 3 · CoFHE + Reverse Auctions
+          Wave 4 · Factory index · decryptForView · Fhenix reveal ACL
         </p>
         <h1 className="mt-3 font-heading text-4xl font-bold leading-tight text-white md:text-5xl">
           Choose your
@@ -67,6 +116,82 @@ export default function Home() {
           All four modes are live on Arbitrum Sepolia. Pick a flow to place bids,
           decrypt outcomes, and verify winners without leaking competing values early.
         </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            to="/dashboard"
+            className="rounded-xl border border-[#00FF94]/50 px-4 py-2 font-label text-xs font-semibold uppercase tracking-wide text-[#00FF94] hover:bg-[#00FF94]/10"
+          >
+            Auction dashboard →
+          </Link>
+          <Link
+            to="/create"
+            className="rounded-xl border border-neutral-700 px-4 py-2 font-label text-xs font-semibold uppercase tracking-wide text-neutral-300 hover:border-neutral-500"
+          >
+            Create auction
+          </Link>
+        </div>
+
+        <div className="mt-8 max-w-3xl rounded-xl border border-[#00FF94]/25 bg-[#00FF94]/5 p-4">
+          <p className="font-label text-[10px] font-bold uppercase tracking-wider text-[#00FF94]/90">
+            Live auctions (factory)
+          </p>
+          {factoryLoading ? (
+            <p className="mt-3 font-label text-sm text-neutral-500">Loading…</p>
+          ) : factoryAuctions.length === 0 ? (
+            <p className="mt-3 font-label text-sm text-neutral-500">
+              No factory auctions yet —{" "}
+              <Link to="/create" className="text-[#00FF94] hover:underline">
+                create one
+              </Link>
+              .
+            </p>
+          ) : (
+            <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+              {factoryAuctions.map((a) => (
+                <li key={a.address}>
+                  <Link
+                    to={factoryAuctionLink(a)}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-priva-bg/60 px-3 py-2 font-label text-sm text-neutral-200 hover:border-[#00FF94]/40"
+                  >
+                    <span className="font-medium text-white">{a.itemName}</span>
+                    <span className="text-[10px] uppercase text-neutral-500">
+                      {MODE_LABEL[a.mode]}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 font-label text-[11px] text-neutral-500">
+            Loaded from PrivaBidFactory on Arbitrum Sepolia — visible on any device.
+          </p>
+        </div>
+
+        {myAuctions.length > 0 && (
+          <div className="mt-8 max-w-3xl rounded-xl border border-sky-500/30 bg-sky-950/30 p-4">
+            <p className="font-label text-[10px] font-bold uppercase tracking-wider text-sky-300/90">
+              Your auctions
+            </p>
+            <ul className="mt-3 space-y-2">
+              {myAuctions.map((a) => (
+                <li key={a.address}>
+                  <Link
+                    to={auctionHref(a.mode, a.address)}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-priva-bg/60 px-3 py-2 font-label text-sm text-neutral-200 hover:border-[#00FF94]/40"
+                  >
+                    <span className="font-medium text-white">{a.itemName}</span>
+                    <span className="text-[10px] uppercase text-neutral-500">
+                      {a.mode.replace("-", " ")}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 font-label text-[11px] text-neutral-500">
+              Saved in this browser after you deploy from Create Auction.
+            </p>
+          </div>
+        )}
 
         <div className="mt-8 max-w-2xl rounded-xl border border-[#00FF94]/25 bg-[#00FF94]/5 p-4">
           <p className="font-label text-[10px] font-bold uppercase tracking-wider text-[#00FF94]/90">

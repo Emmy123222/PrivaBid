@@ -90,6 +90,7 @@ contract PrivaBidDutch {
 
         euint64 enc = FHE.asEuint64(threshold);
         FHE.allowThis(enc);
+        FHE.allowSender(enc);
 
         thresholds[msg.sender] = enc;
         hasThreshold[msg.sender] = true;
@@ -143,6 +144,12 @@ contract PrivaBidDutch {
         emit AuctionClosed(block.timestamp);
     }
 
+    /// @notice Allow Threshold decrypt of the winner's threshold before revealWinner.
+    function authorizeDutchWinnerReveal(address winner) external onlyAuctioneer whenClosed {
+        if (!hasThreshold[winner]) revert UnknownBidder();
+        FHE.allowPublic(thresholds[winner]);
+    }
+
     /// @dev Same pattern as PrivaBid.revealDutchWinner — one decrypt result for the winner's threshold.
     function revealWinner(
         address winner,
@@ -175,5 +182,11 @@ contract PrivaBidDutch {
 
     function getParticipantCount() external view returns (uint256) {
         return bidderList.length;
+    }
+
+    /// @notice Encrypted threshold handle for msg.sender (decryptForView with permit).
+    function getMySealedAmountHandle() external view returns (euint64) {
+        if (!hasThreshold[msg.sender]) revert UnknownBidder();
+        return thresholds[msg.sender];
     }
 }

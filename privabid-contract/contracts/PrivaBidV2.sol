@@ -4,8 +4,8 @@ pragma solidity ^0.8.19;
 import "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 /**
- * @title  PrivaBid
- * @notice Multi-mode encrypted auction platform on Fhenix FHE.
+ * @title  PrivaBidV2
+ * @notice Multi-mode encrypted auction (V2): optional sealed reserve checked via FHE at reveal.
  *         Supports four auction types, all with fully encrypted bids/asks.
  *
  * AUCTION MODES:
@@ -23,7 +23,7 @@ import "@fhenixprotocol/cofhe-contracts/FHE.sol";
  *
  * DEPLOYED ON: Arbitrum Sepolia
  */
-contract PrivaBid {
+contract PrivaBidV2 {
 
     // ─── Auction Mode Enum ───────────────────────────────────────────────────
     enum AuctionMode { FIRST_PRICE, VICKREY, DUTCH, REVERSE }
@@ -42,6 +42,7 @@ contract PrivaBid {
     error ZeroDuration();
     error InvalidMode();
     error ThresholdAlreadySet();
+    error ReserveNotMet();
 
     // ─── State ───────────────────────────────────────────────────────────────
 
@@ -49,7 +50,10 @@ contract PrivaBid {
     AuctionMode public           mode;
     string      public           itemName;
     string      public           itemDescription;
-    uint64      public           reservePrice;   // min bid (FIRST/VICKREY/DUTCH) or max budget (REVERSE)
+    uint64      public           reservePrice;   // public hint for UI; bidding uses encryptedReserve when enabled
+    bool        public           useEncryptedReserve;
+    euint64     private          encryptedReserve;
+    euint64     private          reserveCheckUint; // 1 if highestBid >= encryptedReserve at close
     uint256     public           auctionEndTime;
     bool        public           auctionClosed;
     bool        public           winnerRevealed;
@@ -154,8 +158,9 @@ contract PrivaBid {
         uint64  _reservePrice,
         uint256 _duration,
         uint64  _dutchStartPrice,
-        uint64  _dutchFloorPrice,
-        uint256 _dutchDecrement
+        uint64 _dutchFloorPrice,
+        uint256 _dutchDecrement,
+        bool    _useEncryptedReserve
     ) {
         if (bytes(_itemName).length == 0) revert EmptyItemName();
         if (_reservePrice == 0)           revert ZeroReservePrice();
@@ -166,6 +171,7 @@ contract PrivaBid {
         itemName        = _itemName;
         itemDescription = _itemDescription;
         reservePrice    = _reservePrice;
+        useEncryptedReserve = _useEncryptedReserve;
         auctionEndTime  = block.timestamp + _duration;
         auctionClosed   = false;
         winnerRevealed  = false;
@@ -202,6 +208,11 @@ contract PrivaBid {
             dutchStartBlock = block.number;
         }
 
+        if (_useEncryptedReserve) {
+            encryptedReserve = FHE.asEuint64(_reservePrice);
+            FHE.allowThis(encryptedReserve);
+        }
+
         emit AuctionCreated(msg.sender, _mode, _itemName, _reservePrice, auctionEndTime);
     }
 
@@ -230,7 +241,7 @@ contract PrivaBid {
             mode == AuctionMode.FIRST_PRICE || mode == AuctionMode.VICKREY,
             "Use submitAsk() for REVERSE, setThreshold() for DUTCH"
         );
-        if (amount < reservePrice) revert BelowReservePrice();
+        if (!useEncryptedReserve && amount < reservePrice) revert BelowReservePrice();
 
         // Step 1: Encrypt the incoming bid
         euint64 enc = FHE.asEuint64(amount);
@@ -299,7 +310,7 @@ contract PrivaBid {
     function setThreshold(uint64 threshold) external whileActive {
         require(mode == AuctionMode.DUTCH, "Only for DUTCH mode");
         if (hasThreshold[msg.sender]) revert ThresholdAlreadySet();
-        if (threshold < dutchFloorPrice) revert BelowReservePrice();
+        if (!useEncryptedReserve && threshold < dutchFloorPrice) revert BelowReservePrice();
 
         // Encrypt the threshold — nobody sees this value
         euint64 encThreshold = FHE.asEuint64(threshold);
@@ -352,7 +363,7 @@ contract PrivaBid {
      */
     function submitAsk(uint64 price) external whileActive {
         require(mode == AuctionMode.REVERSE, "Only for REVERSE mode");
-        if (price > reservePrice) revert AboveCeilingPrice(); // reservePrice = buyer's budget ceiling
+        if (!useEncryptedReserve && price > reservePrice) revert AboveCeilingPrice();
 
         // Step 1: Encrypt the ask immediately
         euint64 enc = FHE.asEuint64(price);
@@ -420,11 +431,90 @@ contract PrivaBid {
             FHE.allowPublic(lowestSeller);
         }
 
+        if (useEncryptedReserve && (mode == AuctionMode.FIRST_PRICE || mode == AuctionMode.VICKREY)) {
+            ebool met = FHE.gte(highestBid, encryptedReserve);
+            reserveCheckUint = FHE.select(
+                met,
+                FHE.asEuint64(1),
+                FHE.asEuint64(0)
+            );
+            FHE.allowThis(reserveCheckUint);
+        }
+
+        if (useEncryptedReserve && mode == AuctionMode.REVERSE) {
+            ebool met = FHE.lte(lowestAsk, encryptedReserve);
+            reserveCheckUint = FHE.select(
+                met,
+                FHE.asEuint64(1),
+                FHE.asEuint64(0)
+            );
+            FHE.allowThis(reserveCheckUint);
+        }
+
         // DUTCH: thresholds are per-bidder — reveal handled separately
         // The auctioneer calls revealDutchWinner with the matching bidder
 
         auctionClosed = true;
         emit AuctionClosed(block.timestamp, totalBids);
+    }
+
+    struct WinnerRevealProofs {
+        euint64 bidCtHash;
+        uint64 bidPlaintext;
+        bytes bidSignature;
+        eaddress bidderCtHash;
+        address bidderPlaintext;
+        bytes bidderSignature;
+        euint64 reserveCheckCtHash;
+        uint64 reserveCheckPlaintext;
+        bytes reserveCheckSignature;
+    }
+
+    struct VickreyRevealProofs {
+        euint64 bidCtHash;
+        uint64 bidPlaintext;
+        bytes bidSignature;
+        euint64 secondBidCtHash;
+        uint64 secondBidPlaintext;
+        bytes secondBidSignature;
+        eaddress bidderCtHash;
+        address bidderPlaintext;
+        bytes bidderSignature;
+        euint64 reserveCheckCtHash;
+        uint64 reserveCheckPlaintext;
+        bytes reserveCheckSignature;
+    }
+
+    // ─── Internal reveal helpers (avoid stack-too-deep on Vickrey) ───────────
+
+    function _publishReserveIfNeeded(
+        euint64 reserveCheckCtHash,
+        uint64 reserveCheckPlaintext,
+        bytes calldata reserveCheckSignature
+    ) private {
+        if (!useEncryptedReserve) return;
+        if (reserveCheckPlaintext != 1) revert ReserveNotMet();
+        FHE.publishDecryptResult(
+            reserveCheckCtHash,
+            reserveCheckPlaintext,
+            reserveCheckSignature
+        );
+    }
+
+    function _publishVickreyProofs(
+        euint64 bidCtHash,
+        uint64 bidPlaintext,
+        bytes calldata bidSignature,
+        euint64 secondBidCtHash,
+        uint64 secondBidPlaintext,
+        bytes calldata secondBidSignature,
+        eaddress bidderCtHash,
+        address bidderPlaintext,
+        bytes calldata bidderSignature
+    ) private {
+        FHE.publishDecryptResult(bidCtHash, bidPlaintext, bidSignature);
+        FHE.publishDecryptResult(secondBidCtHash, secondBidPlaintext, secondBidSignature);
+        FHE.publishDecryptResult(bidderCtHash, bidderPlaintext, bidderSignature);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -443,30 +533,29 @@ contract PrivaBid {
      * Reverts if signature is invalid or plaintext is wrong.
      * Winner result is cryptographically proven — not just claimed.
      */
-    function revealWinner(
-        euint64  bidCtHash,
-        uint64   bidPlaintext,
-        bytes calldata bidSignature,
-        eaddress bidderCtHash,
-        address  bidderPlaintext,
-        bytes calldata bidderSignature
-    ) external whenClosed {
+    function revealWinner(WinnerRevealProofs calldata p) external whenClosed {
         require(
             mode == AuctionMode.FIRST_PRICE || mode == AuctionMode.REVERSE,
             "Use revealVickreyWinner() or revealDutchWinner()"
         );
         if (winnerRevealed) revert AlreadyRevealed();
 
-        FHE.publishDecryptResult(bidCtHash,    bidPlaintext,    bidSignature);
-        FHE.publishDecryptResult(bidderCtHash, bidderPlaintext, bidderSignature);
+        _publishReserveIfNeeded(
+            p.reserveCheckCtHash,
+            p.reserveCheckPlaintext,
+            p.reserveCheckSignature
+        );
 
-        if (mode == AuctionMode.FIRST_PRICE) winningBid = bidPlaintext;
-        if (mode == AuctionMode.REVERSE)     winningAsk = bidPlaintext;
+        FHE.publishDecryptResult(p.bidCtHash, p.bidPlaintext, p.bidSignature);
+        FHE.publishDecryptResult(p.bidderCtHash, p.bidderPlaintext, p.bidderSignature);
 
-        winningBidder  = bidderPlaintext;
+        if (mode == AuctionMode.FIRST_PRICE) winningBid = p.bidPlaintext;
+        if (mode == AuctionMode.REVERSE)     winningAsk = p.bidPlaintext;
+
+        winningBidder  = p.bidderPlaintext;
         winnerRevealed = true;
 
-        emit WinnerRevealed(bidderPlaintext, bidPlaintext, block.timestamp);
+        emit WinnerRevealed(p.bidderPlaintext, p.bidPlaintext, block.timestamp);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -480,31 +569,34 @@ contract PrivaBid {
      *
      * Winner pays secondBidPlaintext — not their own bid.
      */
-    function revealVickreyWinner(
-        euint64  bidCtHash,
-        uint64   bidPlaintext,
-        bytes calldata bidSignature,
-        euint64  secondBidCtHash,
-        uint64   secondBidPlaintext,
-        bytes calldata secondBidSignature,
-        eaddress bidderCtHash,
-        address  bidderPlaintext,
-        bytes calldata bidderSignature
-    ) external whenClosed {
+    function revealVickreyWinner(VickreyRevealProofs calldata p) external whenClosed {
         require(mode == AuctionMode.VICKREY, "Only for VICKREY mode");
         if (winnerRevealed) revert AlreadyRevealed();
 
-        // Verify all three proofs — each reverts independently if invalid
-        FHE.publishDecryptResult(bidCtHash,       bidPlaintext,       bidSignature);
-        FHE.publishDecryptResult(secondBidCtHash, secondBidPlaintext, secondBidSignature);
-        FHE.publishDecryptResult(bidderCtHash,    bidderPlaintext,    bidderSignature);
+        _publishReserveIfNeeded(
+            p.reserveCheckCtHash,
+            p.reserveCheckPlaintext,
+            p.reserveCheckSignature
+        );
 
-        winningBid    = bidPlaintext;
-        paymentAmount = secondBidPlaintext; // winner pays this, not winningBid
-        winningBidder = bidderPlaintext;
+        _publishVickreyProofs(
+            p.bidCtHash,
+            p.bidPlaintext,
+            p.bidSignature,
+            p.secondBidCtHash,
+            p.secondBidPlaintext,
+            p.secondBidSignature,
+            p.bidderCtHash,
+            p.bidderPlaintext,
+            p.bidderSignature
+        );
+
+        winningBid    = p.bidPlaintext;
+        paymentAmount = p.secondBidPlaintext;
+        winningBidder = p.bidderPlaintext;
         winnerRevealed = true;
 
-        emit WinnerRevealed(bidderPlaintext, secondBidPlaintext, block.timestamp);
+        emit WinnerRevealed(p.bidderPlaintext, p.secondBidPlaintext, block.timestamp);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -558,6 +650,12 @@ contract PrivaBid {
     function timeRemaining() external view returns (uint256) {
         if (block.timestamp >= auctionEndTime) return 0;
         return auctionEndTime - block.timestamp;
+    }
+
+    /// @notice Encrypted reserve check result (1 = winning bid meets sealed reserve). V2 only.
+    function getReserveMetHandle() external view whenClosed returns (euint64) {
+        require(useEncryptedReserve);
+        return reserveCheckUint;
     }
 
     /// @notice Get winning bid handle (FIRST_PRICE / VICKREY). Only after close.

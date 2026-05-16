@@ -4,7 +4,7 @@
  * `createClient(signer)` export; we call `client.connect(publicClient, walletClient)` then
  * `client.decryptForTx(handle).withoutPermit().execute()` like the SDK types describe.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Contract, formatUnits } from "ethers";
 import { getAddress, isAddress as isAddressViem } from "viem";
 import {
@@ -13,23 +13,43 @@ import {
   useCofhePublicClient,
   useCofheWalletClient,
 } from "@cofhe/react";
-import { ReineiraSDK } from "@reineira-os/sdk";
 import { createBrowserProvider, getReadOnlyRpcProvider } from "../lib/browserProvider";
 import { getTrustedMetaMaskProvider } from "../lib/metamask";
+import PrivaraSettlement from "./PrivaraSettlement";
 import {
   DUTCH_REVEAL_ABI,
-  FIRST_PRICE_REVEAL_ABI,
+  PRIVA_BID_MULTI_REVEAL_ABI,
+  PRIVA_BID_V2_REVEAL_ABI,
+  REVERSE_STANDALONE_REVEAL_ABI,
   VICKREY_REVEAL_ABI,
 } from "../lib/privabidAbis";
+import {
+  onChainModeToRevealMode,
+  resolveRevealTarget,
+  type RevealContractKind,
+} from "../lib/revealTarget";
+import {
+  assertRevealPreflight,
+  formatRevealError,
+  isProofRejected,
+  revealTxOverrides,
+} from "../lib/revealTx";
+import type { RevealWinnerMode } from "../types/auction";
+
+export type { RevealWinnerMode };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 const UINT64_MASK = (1n << 64n) - 1n;
 
-export type RevealWinnerMode = "first-price" | "vickrey" | "dutch" | "reverse";
-
 export type RevealWinnerProps = {
   mode: RevealWinnerMode;
   contractAddress: string;
+  /**
+   * Unix-ms timestamp of when `closeBidding()` confirmed in this session.
+   * If provided and < 60 s ago, the component pre-emptively counts down
+   * before enabling the Reveal button (CoFHE needs time to authorize).
+   */
+  closedAt?: number | null;
   /** Optional: refresh parent auction state after a successful reveal. */
   onRevealSuccess?: () => void;
 };
@@ -77,6 +97,67 @@ function normHandle(h: unknown): bigint {
   return BigInt(String(h));
 }
 
+function readAbiForKind(kind: RevealContractKind): readonly string[] {
+  switch (kind) {
+    case "privabid-v2":
+      return PRIVA_BID_V2_REVEAL_ABI;
+    case "privabid-multi":
+      return PRIVA_BID_MULTI_REVEAL_ABI;
+    case "standalone-vickrey":
+      return VICKREY_REVEAL_ABI;
+    case "standalone-dutch":
+      return DUTCH_REVEAL_ABI;
+    case "standalone-reverse":
+      return REVERSE_STANDALONE_REVEAL_ABI;
+  }
+}
+
+type CofheClientLike = ReturnType<typeof useCofheClient>;
+
+type DecryptResult = {
+  ctHash: bigint | string;
+  decryptedValue: bigint;
+  signature: `0x${string}`;
+};
+
+async function decryptHandle(
+  client: CofheClientLike,
+  handle: bigint,
+  usePermit: boolean,
+): Promise<DecryptResult> {
+  const req = client.decryptForTx(handle);
+  const chain = usePermit ? req.withPermit() : req.withoutPermit();
+  return chain.execute() as Promise<DecryptResult>;
+}
+
+async function decryptWithFallback(
+  client: CofheClientLike,
+  handle: bigint,
+  preferPermit: boolean,
+): Promise<DecryptResult> {
+  try {
+    return await decryptHandle(client, handle, preferPermit);
+  } catch {
+    return decryptHandle(client, handle, !preferPermit);
+  }
+}
+
+function effectiveRevealMode(
+  urlMode: RevealWinnerMode,
+  target: Awaited<ReturnType<typeof resolveRevealTarget>>,
+): RevealWinnerMode {
+  if (
+    (target.kind === "privabid-multi" || target.kind === "privabid-v2") &&
+    target.onChainMode !== undefined
+  ) {
+    return onChainModeToRevealMode(target.onChainMode);
+  }
+  if (target.kind === "standalone-reverse") return "reverse";
+  if (target.kind === "standalone-dutch") return "dutch";
+  if (target.kind === "standalone-vickrey") return "vickrey";
+  return urlMode;
+}
+
 function isUserRejection(e: unknown): boolean {
   const err = e as {
     code?: string | number;
@@ -94,9 +175,13 @@ function isUserRejection(e: unknown): boolean {
   );
 }
 
+/** CoFHE needs time to pick up the closed-state ACL update on Arbitrum Sepolia. */
+const PROOF_RETRY_DELAY_SEC = 90;
+
 export default function RevealWinner({
   mode,
   contractAddress,
+  closedAt,
   onRevealSuccess,
 }: RevealWinnerProps) {
   const cofheClient = useCofheClient();
@@ -106,67 +191,47 @@ export default function RevealWinner({
 
   const [activeStep, setActiveStep] = useState<0 | 1 | 2 | 3>(0);
   const [busy, setBusy] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  /** Seconds remaining before Reveal is re-enabled after a proof rejection. */
+  const [retryIn, setRetryIn] = useState(0);
+
+  // Pre-emptive delay: if the auction closed in this session, schedule the
+  // countdown to start asynchronously so the setState is inside a callback.
+  useEffect(() => {
+    if (closedAt == null) return;
+    const elapsed = Math.floor((Date.now() - closedAt) / 1000);
+    const remaining = Math.max(0, PROOF_RETRY_DELAY_SEC - elapsed);
+    if (remaining <= 0) return;
+    const id = window.setTimeout(() => setRetryIn(remaining), 0);
+    return () => window.clearTimeout(id);
+  }, [closedAt]);
+
+  // Countdown tick — re-runs each second while retryIn > 0.
+  useEffect(() => {
+    if (retryIn <= 0) return;
+    const id = window.setInterval(
+      () => setRetryIn((n) => Math.max(0, n - 1)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [retryIn]);
 
   const [dutchWinner, setDutchWinner] = useState("");
   const [winnerAddr, setWinnerAddr] = useState<string | null>(null);
   const [winningBidUsdc, setWinningBidUsdc] = useState<string | null>(null);
   const [paymentUsdc, setPaymentUsdc] = useState<string | null>(null);
-  const [paymentStatus, setPaymentStatus] = useState<"idle" | "processing" | "complete" | "error">("idle");
-  const [paymentError, setPaymentError] = useState<string | null>(null);
-
   const readProvider = useMemo(() => getReadOnlyRpcProvider(), []);
-
-  const processPayment = async () => {
-    if (!winnerAddr || !winningBidUsdc) return;
-    
-    setPaymentStatus("processing");
-    setPaymentError(null);
-    
-    try {
-      const mm = await getTrustedMetaMaskProvider();
-      if (!mm) {
-        throw new Error("MetaMask not available");
-      }
-      
-      const browser = createBrowserProvider(mm);
-      const signer = await browser.getSigner();
-      const sdk = ReineiraSDK.create({ 
-        network: "testnet", 
-        signer 
-      });
-      
-      // Initialize the SDK
-      await sdk.initialize();
-      
-      // Convert USDC amount to proper format (6 decimals)
-      const amount = sdk.usdc(parseFloat(winningBidUsdc));
-      
-      // Create escrow for the winner
-      const escrow = await sdk.escrow.create({
-        amount: amount,
-        owner: winnerAddr,
-      });
-      
-      // Fund the escrow
-      await escrow.fund(amount, { autoApprove: true });
-      
-      setPaymentStatus("complete");
-    } catch (e: any) {
-      setPaymentStatus("error");
-      setPaymentError(e?.message || "Payment failed");
-    }
-  };
 
   const reveal = async () => {
     setError(null);
     setDone(false);
+    setConnecting(false);
+    setRetryIn(0);
     setWinnerAddr(null);
     setWinningBidUsdc(null);
     setPaymentUsdc(null);
-    setPaymentStatus("idle");
-    setPaymentError(null);
 
     if (isZeroAddr(contractAddress)) {
       setError("No contract configured.");
@@ -186,153 +251,263 @@ export default function RevealWinner({
 
     setBusy(true);
     try {
+      // Always reconnect — a session opened before closeBidding() won't have
+      // the updated ACL that CoFHE sets after the auction closes.
+      setConnecting(true);
+      await cofheClient.connect(
+        publicClient as Parameters<typeof cofheClient.connect>[0],
+        walletClient as Parameters<typeof cofheClient.connect>[1],
+      );
+      setConnecting(false);
       if (!cofheClient.connected) {
-        await cofheClient.connect(
-          publicClient as Parameters<typeof cofheClient.connect>[0],
-          walletClient as Parameters<typeof cofheClient.connect>[1],
+        throw new Error(
+          "CoFHE did not connect — ensure your wallet is on Arbitrum Sepolia and try again.",
         );
       }
 
-      const read = new Contract(
-        contractAddress,
-        mode === "first-price"
-          ? FIRST_PRICE_REVEAL_ABI
-          : mode === "vickrey"
-            ? VICKREY_REVEAL_ABI
-            : mode === "reverse"
-              ? FIRST_PRICE_REVEAL_ABI // PrivaBidReverse uses same ABI pattern as first-price
-              : DUTCH_REVEAL_ABI,
-        readProvider,
-      ) as Contract;
+      const target = await resolveRevealTarget(contractAddress);
+      const revealMode = effectiveRevealMode(mode, target);
+      const abi = readAbiForKind(target.kind);
 
+      const read = new Contract(contractAddress, abi, readProvider) as Contract;
       const browser = createBrowserProvider(mm);
       const signer = await browser.getSigner();
-      const write = new Contract(
-        contractAddress,
-        mode === "first-price"
-          ? FIRST_PRICE_REVEAL_ABI
-          : mode === "vickrey"
-            ? VICKREY_REVEAL_ABI
-            : mode === "reverse"
-              ? FIRST_PRICE_REVEAL_ABI // PrivaBidReverse uses same ABI pattern as first-price
-              : DUTCH_REVEAL_ABI,
-        signer,
-      ) as Contract;
+      const write = new Contract(contractAddress, abi, signer) as Contract;
+      const txOpts = await revealTxOverrides();
+
+      await assertRevealPreflight(read, {
+        kind: revealMode === "reverse" ? "asks" : "bids",
+        skipCount: revealMode === "dutch",
+      });
 
       /* ─── STEP 1: read handles ─── */
       setActiveStep(1);
 
-      if (mode === "dutch") {
+      if (revealMode === "dutch") {
         const w = dutchWinner.trim();
         if (!isAddressViem(w as `0x${string}`)) {
           throw new Error("Enter a valid winner Ethereum address for Dutch reveal.");
         }
         const winner = getAddress(w as `0x${string}`);
+        const hasThr = (await read.hasThreshold(winner)) as boolean;
+        if (!hasThr) {
+          throw new Error("That address has no sealed threshold on this auction.");
+        }
         const thresholdHandle = normHandle(
           await read.getDutchThresholdHandle(winner),
         );
 
-        /* STEP 2 */
-        setActiveStep(2);
-        const thresholdResult = await cofheClient
-          .decryptForTx(thresholdHandle)
-          .withoutPermit()
-          .execute();
+        try {
+          const authTx = await write.authorizeDutchWinnerReveal(winner, txOpts);
+          await authTx.wait();
+          await cofheClient.connect(
+            publicClient as Parameters<typeof cofheClient.connect>[0],
+            walletClient as Parameters<typeof cofheClient.connect>[1],
+          );
+          await new Promise((r) => setTimeout(r, 4000));
+        } catch {
+          /* Older contracts without authorizeDutchWinnerReveal — try permit decrypt */
+        }
 
-        /* STEP 3 */
-        setActiveStep(3);
-        const tx = await write.revealWinner(
-          winner,
-          thresholdResult.ctHash,
-          toUint64(thresholdResult.decryptedValue),
-          thresholdResult.signature,
+        setActiveStep(2);
+        const thresholdResult = await decryptWithFallback(
+          cofheClient,
+          thresholdHandle,
+          false,
         );
-        await tx.wait();
+
+        setActiveStep(3);
+        const thresholdPlain = toUint64(thresholdResult.decryptedValue);
+
+        if (target.kind === "privabid-multi" || target.kind === "privabid-v2") {
+          const tx = await write.revealDutchWinner(
+            winner,
+            thresholdHandle,
+            thresholdPlain,
+            thresholdResult.signature,
+            txOpts,
+          );
+          await tx.wait();
+        } else {
+          const tx = await write.revealWinner(
+            winner,
+            thresholdHandle,
+            thresholdPlain,
+            thresholdResult.signature,
+            txOpts,
+          );
+          await tx.wait();
+        }
 
         setWinnerAddr(winner);
-        setWinningBidUsdc(
-          formatUnits(toUint64(thresholdResult.decryptedValue), 6),
-        );
+        setWinningBidUsdc(formatUnits(thresholdPlain, 6));
         setDone(true);
         onRevealSuccess?.();
         setActiveStep(0);
         return;
       }
 
-      const bidHandle = normHandle(
-        mode === "reverse" 
+      const isReverse = revealMode === "reverse";
+      const valueHandle = normHandle(
+        isReverse
           ? await read.getLowestAskHandle()
-          : await read.getHighestBidHandle()
+          : await read.getHighestBidHandle(),
       );
-      const bidderHandle = normHandle(
-        mode === "reverse"
+      const partyHandle = normHandle(
+        isReverse
           ? await read.getLowestSellerHandle()
-          : await read.getHighestBidderHandle()
+          : await read.getHighestBidderHandle(),
       );
       const secondHandle =
-        mode === "vickrey"
+        revealMode === "vickrey"
           ? normHandle(await read.getSecondHighestBidHandle())
           : null;
 
-      /* STEP 2 */
       setActiveStep(2);
-      const bidResult = await cofheClient
-        .decryptForTx(bidHandle)
-        .withoutPermit()
-        .execute();
+      const preferPermit = false; // dutch is handled above via early return
+      const valueResult = await decryptWithFallback(
+        cofheClient,
+        valueHandle,
+        preferPermit,
+      );
 
-      const bidderResult = await cofheClient
-        .decryptForTx(bidderHandle)
-        .withoutPermit()
-        .execute();
+      const partyResult = await decryptWithFallback(
+        cofheClient,
+        partyHandle,
+        preferPermit,
+      );
 
-      let secondResult: {
-        ctHash: bigint | string;
-        decryptedValue: bigint;
-        signature: `0x${string}`;
-      } | null = null;
-      if (mode === "vickrey" && secondHandle !== null) {
-        secondResult = await cofheClient
-          .decryptForTx(secondHandle)
-          .withoutPermit()
-          .execute();
+      let secondResult: DecryptResult | null = null;
+      if (revealMode === "vickrey" && secondHandle !== null) {
+        secondResult = await decryptWithFallback(
+          cofheClient,
+          secondHandle,
+          false,
+        );
       }
 
-      const bidPlain = toUint64(bidResult.decryptedValue);
-      const bidderPlainAddr = bigintToAddress(bidderResult.decryptedValue);
+      const valuePlain = toUint64(valueResult.decryptedValue);
+      const partyPlainAddr = bigintToAddress(partyResult.decryptedValue);
 
-      /* STEP 3 */
+      let reserveHandle = 0n;
+      let reservePlain = 0n;
+      let reserveSig = "0x" as `0x${string}`;
+
+      if (target.kind === "privabid-v2" && target.useEncryptedReserve) {
+        const rh = normHandle(await read.getReserveMetHandle());
+        const reserveResult = await decryptWithFallback(
+          cofheClient,
+          rh,
+          false,
+        );
+        reservePlain = toUint64(reserveResult.decryptedValue);
+        if (reservePlain !== 1n) {
+          throw new Error(
+            "Sealed reserve not met — winning bid does not satisfy the encrypted floor.",
+          );
+        }
+        reserveHandle = rh;
+        reserveSig = reserveResult.signature;
+      }
+
       setActiveStep(3);
 
-      if (mode === "vickrey" && secondResult) {
-        const secondPlain = toUint64(secondResult.decryptedValue);
+      if (target.kind === "standalone-reverse") {
         const tx = await write.revealWinner(
-          bidResult.ctHash,
-          bidPlain,
-          bidResult.signature,
-          secondResult.ctHash,
-          secondPlain,
-          secondResult.signature,
-          bidderResult.ctHash,
-          bidderPlainAddr,
-          bidderResult.signature,
+          valuePlain,
+          valueResult.signature,
+          partyPlainAddr,
+          partyResult.signature,
+          txOpts,
         );
         await tx.wait();
-        setWinnerAddr(bidderPlainAddr);
-        setWinningBidUsdc(formatUnits(bidPlain, 6));
+        setWinnerAddr(partyPlainAddr);
+        setWinningBidUsdc(formatUnits(valuePlain, 6));
+      } else if (revealMode === "vickrey" && secondResult) {
+        const secondPlain = toUint64(secondResult.decryptedValue);
+
+        if (target.kind === "privabid-v2") {
+          const tx = await write.revealVickreyWinner(
+            {
+              bidCtHash: valueHandle,
+              bidPlaintext: valuePlain,
+              bidSignature: valueResult.signature,
+              secondBidCtHash: secondHandle,
+              secondBidPlaintext: secondPlain,
+              secondBidSignature: secondResult.signature,
+              bidderCtHash: partyHandle,
+              bidderPlaintext: partyPlainAddr,
+              bidderSignature: partyResult.signature,
+              reserveCheckCtHash: reserveHandle,
+              reserveCheckPlaintext: reservePlain,
+              reserveCheckSignature: reserveSig,
+            },
+            txOpts,
+          );
+          await tx.wait();
+        } else if (target.kind === "privabid-multi") {
+          const tx = await write.revealVickreyWinner(
+            valueHandle,
+            valuePlain,
+            valueResult.signature,
+            secondHandle,
+            secondPlain,
+            secondResult.signature,
+            partyHandle,
+            partyPlainAddr,
+            partyResult.signature,
+            txOpts,
+          );
+          await tx.wait();
+        } else {
+          const tx = await write.revealWinner(
+            valueHandle,
+            valuePlain,
+            valueResult.signature,
+            secondHandle,
+            secondPlain,
+            secondResult.signature,
+            partyHandle,
+            partyPlainAddr,
+            partyResult.signature,
+            txOpts,
+          );
+          await tx.wait();
+        }
+        setWinnerAddr(partyPlainAddr);
+        setWinningBidUsdc(formatUnits(valuePlain, 6));
         setPaymentUsdc(formatUnits(secondPlain, 6));
+      } else if (target.kind === "privabid-v2") {
+        const tx = await write.revealWinner(
+          {
+            bidCtHash: valueHandle,
+            bidPlaintext: valuePlain,
+            bidSignature: valueResult.signature,
+            bidderCtHash: partyHandle,
+            bidderPlaintext: partyPlainAddr,
+            bidderSignature: partyResult.signature,
+            reserveCheckCtHash: reserveHandle,
+            reserveCheckPlaintext: reservePlain,
+            reserveCheckSignature: reserveSig,
+          },
+          txOpts,
+        );
+        await tx.wait();
+        setWinnerAddr(partyPlainAddr);
+        setWinningBidUsdc(formatUnits(valuePlain, 6));
       } else {
         const tx = await write.revealWinner(
-          bidResult.ctHash,
-          bidPlain,
-          bidResult.signature,
-          bidderResult.ctHash,
-          bidderPlainAddr,
-          bidderResult.signature,
+          valueHandle,
+          valuePlain,
+          valueResult.signature,
+          partyHandle,
+          partyPlainAddr,
+          partyResult.signature,
+          txOpts,
         );
         await tx.wait();
-        setWinnerAddr(bidderPlainAddr);
-        setWinningBidUsdc(formatUnits(bidPlain, 6));
+        setWinnerAddr(partyPlainAddr);
+        setWinningBidUsdc(formatUnits(valuePlain, 6));
       }
 
       setDone(true);
@@ -340,10 +515,14 @@ export default function RevealWinner({
       setActiveStep(0);
     } catch (e) {
       setActiveStep(0);
+      setConnecting(false);
       if (isUserRejection(e)) {
         setError("Transaction cancelled");
       } else {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(formatRevealError(e));
+        if (isProofRejected(e)) {
+          setRetryIn(PROOF_RETRY_DELAY_SEC);
+        }
       }
     } finally {
       setBusy(false);
@@ -418,7 +597,19 @@ export default function RevealWinner({
         <p className="font-label text-xs text-red-400">{error}</p>
       )}
 
-      {busy && activeStep >= 1 && activeStep <= 2 && (
+      {retryIn > 0 && (
+        <p className="font-label text-[11px] text-amber-200/90" aria-live="polite">
+          CoFHE is authorizing decryption — retry in {retryIn}s…
+        </p>
+      )}
+
+      {connecting && (
+        <p className="font-label text-xs text-[#00FF94]/90" aria-live="polite">
+          Connecting to CoFHE on Arbitrum Sepolia…
+        </p>
+      )}
+
+      {busy && !connecting && activeStep >= 1 && activeStep <= 2 && (
         <p className="font-label text-xs text-[#00FF94]/90" aria-live="polite">
           Requesting Threshold Network decryption…
         </p>
@@ -426,11 +617,11 @@ export default function RevealWinner({
 
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || retryIn > 0}
         onClick={() => void reveal()}
         className="w-full rounded-xl border border-[#00FF94]/50 py-2.5 font-label text-xs font-semibold uppercase tracking-wide text-[#00FF94] hover:bg-[#00FF94]/10 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {busy ? "Working…" : "Reveal Winner"}
+        {busy ? "Working…" : retryIn > 0 ? `Retry in ${retryIn}s` : "Reveal Winner"}
       </button>
 
       {done && winnerAddr && winningBidUsdc && (
@@ -466,47 +657,13 @@ export default function RevealWinner({
               ? "All competing asks permanently sealed" 
               : "All losing bids permanently sealed"}
           </p>
-          
-          {paymentStatus === "idle" && (
-            <button
-              type="button"
-              onClick={() => void processPayment()}
-              className="mt-4 w-full rounded-xl border border-sky-500/50 py-2.5 font-label text-xs font-semibold uppercase tracking-wide text-sky-400 hover:bg-sky-500/10"
-            >
-              Process Payment via Reineira
-            </button>
-          )}
-          
-          {paymentStatus === "processing" && (
-            <div className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
-              <p className="font-label text-sm text-sky-400">
-                Processing confidential payment...
-              </p>
-            </div>
-          )}
-          
-          {paymentStatus === "complete" && (
-            <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <p className="font-label text-sm text-emerald-400">
-                Payment complete ✓ — settled via Reineira
-              </p>
-            </div>
-          )}
-          
-          {paymentStatus === "error" && paymentError && (
-            <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-              <p className="font-label text-sm text-red-400">
-                Payment failed: {paymentError}
-              </p>
-              <button
-                type="button"
-                onClick={() => void processPayment()}
-                className="mt-2 rounded-lg border border-red-500/50 px-3 py-1 font-label text-xs text-red-400 hover:bg-red-500/10"
-              >
-                Retry Payment
-              </button>
-            </div>
-          )}
+
+          <PrivaraSettlement
+            className="mt-4"
+            recipient={winnerAddr}
+            amountUsdc={winningBidUsdc}
+            paymentAmountUsdc={paymentUsdc}
+          />
         </div>
       )}
     </div>
