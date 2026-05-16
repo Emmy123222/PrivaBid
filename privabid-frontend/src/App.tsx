@@ -4,6 +4,7 @@ import { CHAIN_ID } from "./config/contracts";
 import AuctionPage from "./pages/AuctionPage";
 import CreateAuction from "./pages/CreateAuction";
 import ReverseAuctionPage from "./pages/ReverseAuctionPage";
+import Dashboard from "./pages/Dashboard";
 import Home from "./pages/Home";
 import Landing from "./pages/Landing";
 
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/" element={<Landing />} />
           <Route element={<AppLayout />}>
             <Route path="/home" element={<Home />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/create" element={<CreateAuction />} />
             <Route path="/auction/:mode" element={<AuctionPage />} />
             <Route path="/reverse-auction" element={<ReverseAuctionPage />} />

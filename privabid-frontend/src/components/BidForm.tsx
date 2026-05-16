@@ -13,6 +13,10 @@ import {
   getReadOnlyRpcProvider,
 } from "../lib/browserProvider";
 import {
+  getBufferedEip1559GasOverrides,
+  isMaxFeeBelowBaseFeeError,
+} from "../lib/eip1559Gas";
+import {
   ensureArbitrumSepoliaInMetaMask,
   getTrustedMetaMaskProvider,
 } from "../lib/metamask";
@@ -78,6 +82,9 @@ function isBelowReserveError(e: unknown): boolean {
 const DUTCH_SET_THRESHOLD_GAS = 4_000_000n;
 
 function formatBidTxError(e: unknown): string {
+  if (isMaxFeeBelowBaseFeeError(e)) {
+    return "Network gas price moved — try submitting your bid again.";
+  }
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -310,6 +317,8 @@ export default function BidForm({
 
       setPhase("working");
 
+      const gas = await getBufferedEip1559GasOverrides();
+
       const contract = new Contract(
         contractAddress,
         BIDFORM_WRITE_ABI,
@@ -319,6 +328,7 @@ export default function BidForm({
       if (mode === "dutch") {
         const tx = await (contract as Contract).setThreshold(micro, {
           gasLimit: DUTCH_SET_THRESHOLD_GAS,
+          ...gas,
         });
         await tx.wait();
         setPhase("success");
@@ -326,14 +336,14 @@ export default function BidForm({
           "You will win automatically if price reaches your floor.",
         );
       } else if (mode === "reverse") {
-        const tx = await (contract as Contract).submitAsk(micro);
+        const tx = await (contract as Contract).submitAsk(micro, gas);
         await tx.wait();
         setPhase("success");
         setSuccessHint(
           "Your ask is encrypted.\nNo vendor can see competing asks.",
         );
       } else {
-        const tx = await (contract as Contract).bid(micro);
+        const tx = await (contract as Contract).bid(micro, gas);
         await tx.wait();
         setPhase("success");
         setSuccessHint(

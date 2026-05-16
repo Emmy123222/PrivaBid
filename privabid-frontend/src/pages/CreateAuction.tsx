@@ -1,18 +1,59 @@
 import { useState } from "react";
-import { Contract } from "ethers";
+import { Contract, getAddress, isAddress } from "ethers";
 import { Link, useNavigate } from "react-router-dom";
 import { createBrowserProvider } from "../lib/browserProvider";
 import { getTrustedMetaMaskProvider } from "../lib/metamask";
 import NetworkGateBanner from "../components/NetworkGateBanner";
 
-import { CONTRACTS } from "../config/contracts";
+import { activeFactoryAddress, CONTRACTS } from "../config/contracts";
+import { saveMyAuction } from "../lib/myAuctions";
 
-const FACTORY_ABI = [
+const FACTORY_ABI_V1 = [
   "function createAuction(uint8 mode, string itemName, string itemDescription, uint64 reservePrice, uint256 duration, uint64 dutchStartPrice, uint64 dutchFloorPrice, uint256 dutchDecrement) returns (address)",
-  "event AuctionDeployed(address indexed contractAddress, uint8 mode, string itemName, address indexed creator)",
+  "event AuctionDeployed(address indexed creator, address indexed contractAddress, uint8 mode, string itemName, uint256 timestamp)",
 ] as const;
 
-const FACTORY_ADDRESS = CONTRACTS.FACTORY.address;
+const FACTORY_ABI_V2 = [
+  "function createAuction(uint8 mode, string itemName, string itemDescription, uint64 reservePrice, uint256 duration, uint64 dutchStartPrice, uint64 dutchFloorPrice, uint256 dutchDecrement, bool useEncryptedReserve) returns (address)",
+  "event AuctionDeployed(address indexed creator, address indexed contractAddress, uint8 mode, string itemName, uint256 timestamp)",
+] as const;
+
+/** Must match `PrivaBidFactory.sol` — wrong topic hash breaks receipt parsing. */
+function readDeployedAuctionAddress(
+  receipt: { logs: ReadonlyArray<{ address: string; topics: readonly string[]; data: string }> },
+  factory: Contract,
+  factoryAddress: string,
+): string {
+  const factoryAddr = getAddress(factoryAddress);
+  for (const log of receipt.logs) {
+    if (getAddress(log.address) !== factoryAddr) continue;
+    try {
+      const parsed = factory.interface.parseLog({
+        topics: [...log.topics],
+        data: log.data,
+      });
+      if (parsed?.name === "AuctionDeployed") {
+        return getAddress(String(parsed.args.contractAddress));
+      }
+    } catch {
+      /* unrelated log */
+    }
+  }
+  throw new Error("Could not find AuctionDeployed event in transaction receipt");
+}
+
+function resolveFactoryAddress(): string {
+  return activeFactoryAddress();
+}
+
+function isFactoryV2(addr: string): boolean {
+  const v2 = CONTRACTS.FACTORY_V2.address;
+  return (
+    !!v2 &&
+    v2 !== "0x0000000000000000000000000000000000000000" &&
+    addr.toLowerCase() === v2.toLowerCase()
+  );
+}
 
 type AuctionMode = "first-price" | "vickrey" | "dutch" | "reverse";
 
@@ -58,18 +99,21 @@ export default function CreateAuction() {
   const [dutchStartPrice, setDutchStartPrice] = useState("");
   const [dutchDecrementAmount, setDutchDecrementAmount] = useState("");
   const [dutchDecrementInterval, setDutchDecrementInterval] = useState("");
-  
+  const [useEncryptedReserve, setUseEncryptedReserve] = useState(false);
+
   const [isDeploying, setIsDeploying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isDutchMode = mode === "dutch";
   const selectedMode = AUCTION_MODES.find(m => m.value === mode);
+  const factoryAddress = resolveFactoryAddress();
+  const factoryIsV2 = isFactoryV2(factoryAddress);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (isZeroAddress(FACTORY_ADDRESS)) {
+    if (isZeroAddress(factoryAddress)) {
       setError("Factory contract not configured yet.");
       return;
     }
@@ -95,7 +139,8 @@ export default function CreateAuction() {
 
       const browser = createBrowserProvider(mm);
       const signer = await browser.getSigner();
-      const factory = new Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
+      const factoryAbi = factoryIsV2 ? FACTORY_ABI_V2 : FACTORY_ABI_V1;
+      const factory = new Contract(factoryAddress, factoryAbi, signer);
 
       // Convert prices to microUSDC (6 decimals)
       const reservePriceMicro = BigInt(Math.floor(parseFloat(reservePrice) * 1_000_000));
@@ -109,51 +154,70 @@ export default function CreateAuction() {
         ? BigInt(dutchDecrementInterval)
         : 0n;
 
-      const tx = await factory.createAuction(
-        selectedMode!.modeId,
-        itemName.trim(),
-        itemDescription.trim(),
-        reservePriceMicro,
-        BigInt(duration),
-        dutchStartPriceMicro,
-        dutchFloorPriceMicro,
-        dutchDecrementBlocks
-      );
+      const tx = factoryIsV2
+        ? await factory.createAuction(
+            selectedMode!.modeId,
+            itemName.trim(),
+            itemDescription.trim(),
+            reservePriceMicro,
+            BigInt(duration),
+            dutchStartPriceMicro,
+            dutchFloorPriceMicro,
+            dutchDecrementBlocks,
+            useEncryptedReserve,
+          )
+        : await factory.createAuction(
+            selectedMode!.modeId,
+            itemName.trim(),
+            itemDescription.trim(),
+            reservePriceMicro,
+            BigInt(duration),
+            dutchStartPriceMicro,
+            dutchFloorPriceMicro,
+            dutchDecrementBlocks,
+          );
 
       const receipt = await tx.wait();
-      
-      // Find the AuctionDeployed event
-      const event = receipt.logs.find((log: any) => {
-        try {
-          const parsed = factory.interface.parseLog(log);
-          return parsed?.name === "AuctionDeployed";
-        } catch {
-          return false;
-        }
-      });
-
-      if (!event) {
-        throw new Error("Could not find AuctionDeployed event in transaction receipt");
+      if (!receipt) {
+        throw new Error("Transaction was not mined");
       }
 
-      const parsed = factory.interface.parseLog(event);
-      const newAddress = parsed!.args.contractAddress;
+      const newAddress = readDeployedAuctionAddress(
+        receipt,
+        factory,
+        factoryAddress,
+      );
+      if (!isAddress(newAddress)) {
+        throw new Error("Invalid auction address from factory event");
+      }
 
-      // Navigate to the new auction page
-      navigate(`/auction/${mode}/${newAddress}`);
+      saveMyAuction({
+        address: newAddress,
+        mode,
+        itemName: itemName.trim(),
+        createdAt: Date.now(),
+      });
 
-    } catch (e: any) {
-      if (e?.code === "ACTION_REJECTED" || e?.code === 4001) {
+      const q = `?address=${encodeURIComponent(newAddress)}`;
+      if (mode === "reverse") {
+        navigate(`/reverse-auction${q}`, { replace: true });
+      } else {
+        navigate(`/auction/${mode}${q}`, { replace: true });
+      }
+
+    } catch (e: unknown) {
+      const err = e as { code?: string | number; message?: string };
+      if (err?.code === "ACTION_REJECTED" || err?.code === 4001) {
         setError("Transaction cancelled");
       } else {
-        setError(e?.message || "Failed to deploy auction");
+        setError(err?.message || "Failed to deploy auction");
       }
     } finally {
       setIsDeploying(false);
     }
   };
 
-  if (isZeroAddress(FACTORY_ADDRESS)) {
+  if (isZeroAddress(factoryAddress)) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-10">
         <Link
@@ -272,6 +336,29 @@ export default function CreateAuction() {
                 </span>
               </div>
             </div>
+
+            {factoryIsV2 && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <input
+                  type="checkbox"
+                  checked={useEncryptedReserve}
+                  onChange={(e) => setUseEncryptedReserve(e.target.checked)}
+                  disabled={isDeploying}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-label text-sm font-medium text-amber-100">
+                    Encrypted reserve (V2)
+                  </span>
+                  <span className="mt-1 block font-label text-xs text-neutral-400">
+                    Floor/ceiling is sealed from bidders. At reveal,{" "}
+                    <code className="text-[#00FF94]">FHE.gte</code> /{" "}
+                    <code className="text-[#00FF94]">FHE.lte</code> proves the
+                    winning bid meets the encrypted reserve.
+                  </span>
+                </span>
+              </label>
+            )}
 
             {/* Duration */}
             <div>

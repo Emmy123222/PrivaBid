@@ -12,6 +12,8 @@
     "deploy:dutch": "hardhat run scripts/deployDutch.ts --network arb-sepolia",
     "deploy:reverse": "hardhat run scripts/deploy-reverse.ts --network arb-sepolia",
     "deploy:factory": "hardhat run scripts/deploy-factory.ts --network arb-sepolia",
+    "deploy:factory-v2": "hardhat run scripts/deploy-factory-v2.ts --network arb-sepolia",
+    "deploy:demo": "hardhat run scripts/deploy-wave4-demo.ts --network arb-sepolia",
     "deploy:eth": "hardhat run scripts/deploy.ts --network eth-sepolia",
     "clean": "hardhat clean"
   },

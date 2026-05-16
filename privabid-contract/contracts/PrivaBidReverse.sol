@@ -21,6 +21,7 @@ contract PrivaBidReverse {
     error AboveBudget();
     error NoAsks();
     error AlreadySubmitted();
+    error NoSealedAmount();
 
     // ─── State Variables ─────────────────────────────────────────────────────
     address public immutable buyer;
@@ -43,6 +44,9 @@ contract PrivaBidReverse {
     // Participation tracking
     mapping(address => bool) public hasSubmitted;
     address[] public sellerList;
+
+    /// @dev Seller's last sealed ask for decryptForView (only visible to the seller).
+    mapping(address => euint64) private mySealedAsk;
 
     // ─── Events ──────────────────────────────────────────────────────────────
     event AuctionCreated(address buyer, string itemName, uint64 budget, uint256 endTime);
@@ -103,6 +107,9 @@ contract PrivaBidReverse {
 
         // Encrypt the ask
         euint64 encAsk = FHE.asEuint64(price);
+        mySealedAsk[msg.sender] = encAsk;
+        FHE.allowThis(encAsk);
+        FHE.allowSender(encAsk);
 
         // Check if this ask is lower than current lowest
         ebool isLower = FHE.lt(encAsk, lowestAsk);
@@ -178,6 +185,12 @@ contract PrivaBidReverse {
      */
     function getLowestSellerHandle() external view whenClosed returns (eaddress) {
         return lowestSeller;
+    }
+
+    /// @notice Encrypted handle for msg.sender's sealed ask (decryptForView with permit).
+    function getMySealedAmountHandle() external view returns (euint64) {
+        if (!hasSubmitted[msg.sender]) revert NoSealedAmount();
+        return mySealedAsk[msg.sender];
     }
 
     /**

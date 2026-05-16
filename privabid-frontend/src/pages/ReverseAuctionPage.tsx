@@ -6,18 +6,19 @@ import {
   useState,
 } from "react";
 import { Contract, formatUnits, isAddress } from "ethers";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import BidForm from "../components/BidForm";
 import CloseAuctionPanel from "../components/CloseAuctionPanel";
 import NetworkGateBanner from "../components/NetworkGateBanner";
+import MySealedAmount from "../components/MySealedAmount";
 import RevealWinner from "../components/RevealWinner";
+import { CONTRACTS } from "../config/contracts";
 import { getReadOnlyRpcProvider } from "../lib/browserProvider";
-import { FIRST_PRICE_REVEAL_ABI } from "../lib/privabidAbis";
+import { REVERSE_ABI } from "../lib/privabidAbis";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
-// Use the deployed PrivaBidReverse contract address
-const REVERSE_CONTRACT_ADDRESS = "0x291DD038A12eD7eaaB383751cA4841e6D1B3434b";
+const DEFAULT_REVERSE_ADDRESS = CONTRACTS.REVERSE.address;
 
 type LifecycleStatus = "ACTIVE" | "CLOSED" | "REVEALED";
 
@@ -92,13 +93,18 @@ function isZeroAddress(a: string): boolean {
 
 export default function ReverseAuctionPage() {
   const location = useLocation();
-  const address = REVERSE_CONTRACT_ADDRESS;
+  const [searchParams] = useSearchParams();
+  const addressParam = searchParams.get("address")?.trim() ?? "";
+  const address =
+    addressParam.length > 0 && isAddress(addressParam)
+      ? addressParam
+      : DEFAULT_REVERSE_ADDRESS;
 
   const readProvider = useMemo(() => getReadOnlyRpcProvider(), []);
 
   const readContract = useMemo(() => {
     if (isZeroAddress(address)) return null;
-    return new Contract(address, FIRST_PRICE_REVEAL_ABI, readProvider);
+    return new Contract(address, REVERSE_ABI, readProvider);
   }, [address, readProvider]);
 
   const [snapshot, setSnapshot] = useState<AuctionSnapshot | null>(null);
@@ -106,6 +112,7 @@ export default function ReverseAuctionPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [sessionClosedAt, setSessionClosedAt] = useState<number | null>(null);
 
   const fetchState = useCallback(async () => {
     if (!readContract || isZeroAddress(address)) {
@@ -418,6 +425,7 @@ export default function ReverseAuctionPage() {
                   auctioneer={buyerAddr}
                   canClose={snapshot.status === "ACTIVE" && !snapshot.auctionClosed}
                   onClosed={() => {
+                    setSessionClosedAt(Date.now());
                     void fetchState();
                     void hydrateFeedFromLogs();
                   }}
@@ -442,6 +450,10 @@ export default function ReverseAuctionPage() {
                           void hydrateFeedFromLogs();
                         }}
                       />
+                      <MySealedAmount
+                        contractAddress={address}
+                        amountLabel="Your ask"
+                      />
                     </div>
                   </div>
                 ) : (
@@ -462,6 +474,7 @@ export default function ReverseAuctionPage() {
                   <RevealWinner
                     mode="reverse"
                     contractAddress={address}
+                    closedAt={sessionClosedAt}
                     onRevealSuccess={() => {
                       void fetchState();
                       void hydrateFeedFromLogs();

@@ -6,17 +6,23 @@ import {
   useState,
 } from "react";
 import { Contract, formatUnits, isAddress } from "ethers";
-import { Link, Navigate, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
 import BidForm from "../components/BidForm";
 import CloseAuctionPanel from "../components/CloseAuctionPanel";
 import DutchPriceTracker from "../components/DutchPriceTracker";
 import NetworkGateBanner from "../components/NetworkGateBanner";
+import MySealedAmount from "../components/MySealedAmount";
 import RevealWinner from "../components/RevealWinner";
 import { CONTRACTS } from "../config/contracts";
+import {
+  fetchPrivaBidMultiSnapshot,
+  isPrivaBidMultiContract,
+} from "../lib/auctionLoad";
 import { getReadOnlyRpcProvider } from "../lib/browserProvider";
 import { DUTCH_ABI, PRIVA_BID_ABI, VICKREY_ABI } from "../lib/privabidAbis";
+import type { RevealWinnerMode } from "../types/auction";
 import type { RouteAuctionMode } from "../types/auction";
-import { isRouteAuctionMode } from "../types/auction";
+import { isRouteAuctionMode, onChainModeToRouteMode } from "../types/auction";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
@@ -141,22 +147,36 @@ export default function AuctionPage() {
 
 function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const contractKey = ROUTE_TO_CONTRACT_KEY[routeMode];
   const meta = CONTRACTS[contractKey];
-  const address = meta.address;
+  const addressParam = searchParams.get("address")?.trim() ?? "";
+  const addressFromUrl =
+    addressParam.length > 0 && isAddress(addressParam);
+  const address = addressFromUrl ? addressParam : meta.address;
 
   const readProvider = useMemo(() => getReadOnlyRpcProvider(), []);
+
+  const [usesMultiContract, setUsesMultiContract] = useState<boolean | null>(
+    null,
+  );
+  const [onChainMode, setOnChainMode] = useState<number | null>(null);
+
+  const effectiveRouteMode: RouteAuctionMode =
+    onChainMode !== null ? onChainModeToRouteMode(onChainMode) : routeMode;
+
+  const revealMode: RevealWinnerMode = effectiveRouteMode;
 
   const readContract = useMemo(() => {
     if (isZeroAddress(address)) return null;
     const abi =
-      routeMode === "first-price"
+      usesMultiContract || routeMode === "first-price"
         ? PRIVA_BID_ABI
         : routeMode === "vickrey"
           ? VICKREY_ABI
           : DUTCH_ABI;
     return new Contract(address, abi, readProvider);
-  }, [address, readProvider, routeMode]);
+  }, [address, readProvider, routeMode, usesMultiContract]);
 
   const [snapshot, setSnapshot] = useState<AuctionSnapshot | null>(null);
   const [auctioneerAddr, setAuctioneerAddr] = useState<string | null>(null);
@@ -164,6 +184,8 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [matchEvents, setMatchEvents] = useState(0);
+  /** Unix-ms timestamp of when closeBidding() confirmed in this session. */
+  const [sessionClosedAt, setSessionClosedAt] = useState<number | null>(null);
 
   const fetchState = useCallback(async () => {
     if (!readContract || isZeroAddress(address)) {
@@ -173,46 +195,29 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
     }
     setLoadError(null);
     try {
-      if (routeMode === "first-price") {
-        const c = readContract as Contract;
-        const state = (await c.getAuctionState()) as unknown as [
-          bigint,
-          string,
-          bigint,
-          bigint,
-          boolean,
-          boolean,
-          bigint,
-          bigint,
-          string,
-          bigint,
-          bigint,
-        ];
-        const itemName = state[1];
-        const reservePrice = state[2];
-        const auctionEndTime = state[3];
-        const auctionClosed = state[4];
-        const winnerRevealed = state[5];
-        const totalBids = state[6];
-        const winningBidder = state[8];
-        const winningBid = state[9];
-        const paymentAmount = state[10];
-        const timeRemainingSec = (await c.timeRemaining()) as bigint;
+      const multi = await isPrivaBidMultiContract(address);
+      setUsesMultiContract(multi);
+
+      if (multi) {
+        const loaded = await fetchPrivaBidMultiSnapshot(address);
+        setOnChainMode(loaded.onChainMode);
         setSnapshot({
-          itemName,
-          timeRemainingSec,
-          totalBids,
-          status: deriveStatus(auctionClosed, winnerRevealed),
-          winningBidder,
-          winningBid,
-          paymentAmount,
-          reservePrice,
-          auctionEndTime,
-          auctionClosed,
-          winnerRevealed,
+          itemName: loaded.itemName,
+          timeRemainingSec: loaded.timeRemainingSec,
+          totalBids: loaded.totalBids,
+          status: deriveStatus(loaded.auctionClosed, loaded.winnerRevealed),
+          winningBidder: loaded.winningBidder,
+          winningBid: loaded.winningBid,
+          paymentAmount: loaded.paymentAmount,
+          reservePrice: loaded.reservePrice,
+          auctionEndTime: loaded.auctionEndTime,
+          auctionClosed: loaded.auctionClosed,
+          winnerRevealed: loaded.winnerRevealed,
         });
         return;
       }
+
+      setOnChainMode(null);
 
       if (routeMode === "vickrey") {
         const c = readContract as Contract;
@@ -310,7 +315,7 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
       const latest = await readProvider.getBlockNumber();
       const from = latest > 15_000 ? latest - 15_000 : 0;
 
-      if (routeMode === "dutch") {
+      if (effectiveRouteMode === "dutch") {
         const thresholdFilter = readContract.filters.ThresholdSet();
         const thresholdLogs = await readContract.queryFilter(
           thresholdFilter,
@@ -377,7 +382,7 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
     } catch {
       /* ignore log hydration errors */
     }
-  }, [address, readContract, readProvider, routeMode]);
+  }, [address, effectiveRouteMode, readContract, readProvider]);
 
   useEffect(() => {
     startTransition(() => {
@@ -401,14 +406,14 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
   const fheTags = useMemo(
     () =>
       snapshot
-        ? fheTagsForRoute(routeMode, snapshot.totalBids, matchEvents)
+        ? fheTagsForRoute(effectiveRouteMode, snapshot.totalBids, matchEvents)
         : [],
-    [matchEvents, routeMode, snapshot],
+    [effectiveRouteMode, matchEvents, snapshot],
   );
 
   const canPlaceBid =
     snapshot?.status === "ACTIVE" &&
-    (routeMode === "dutch" ? true : snapshot.timeRemainingSec > 0n);
+    (effectiveRouteMode === "dutch" ? true : snapshot.timeRemainingSec > 0n);
 
   useEffect(() => {
     if (location.hash !== "#place-your-bid") return;
@@ -423,7 +428,7 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
   }, [canPlaceBid, location.hash, snapshot?.status]);
 
   const countdownLabel =
-    routeMode === "dutch"
+    effectiveRouteMode === "dutch"
       ? "Open until auctioneer closes"
       : snapshot
         ? formatCountdown(snapshot.timeRemainingSec)
@@ -463,6 +468,28 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
       )}
 
       <NetworkGateBanner />
+
+      {addressFromUrl && (
+        <div className="mt-4 rounded-xl border border-sky-500/35 bg-sky-950/40 px-4 py-3">
+          <p className="font-label text-xs text-sky-100/95">
+            Your deployed auction{" "}
+            <span className="font-semibold text-white">
+              {snapshot?.itemName ?? "…"}
+            </span>
+          </p>
+          <p className="mt-1 break-all font-mono text-[10px] text-sky-200/80">
+            {address}
+          </p>
+          {onChainMode !== null &&
+            onChainModeToRouteMode(onChainMode) !== routeMode && (
+              <p className="mt-2 font-label text-[11px] text-amber-200/90">
+                On-chain mode is{" "}
+                <strong>{MODE_BADGE[effectiveRouteMode]}</strong> (link was{" "}
+                {MODE_BADGE[routeMode]}).
+              </p>
+            )}
+        </div>
+      )}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_320px]">
         <div className="space-y-8">
@@ -542,10 +569,10 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
             </a>
           </section>
 
-          {routeMode === "dutch" && (
+          {effectiveRouteMode === "dutch" && (
             <DutchPriceTracker
               contractAddress={address}
-              variant="standalone"
+              variant={usesMultiContract ? "multimode" : "standalone"}
             />
           )}
 
@@ -601,6 +628,7 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
                   auctioneer={auctioneerAddr}
                   canClose={snapshot.status === "ACTIVE" && !snapshot.auctionClosed}
                   onClosed={() => {
+                    setSessionClosedAt(Date.now());
                     void fetchState();
                     void hydrateFeedFromLogs();
                   }}
@@ -622,12 +650,20 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
                     </p>
                     <div className="mt-4">
                       <BidForm
-                        mode={routeMode}
+                        mode={effectiveRouteMode}
                         contractAddress={address}
                         onBidSuccess={() => {
                           void fetchState();
                           void hydrateFeedFromLogs();
                         }}
+                      />
+                      <MySealedAmount
+                        contractAddress={address}
+                        amountLabel={
+                          effectiveRouteMode === "dutch"
+                            ? "Your threshold"
+                            : "Your bid"
+                        }
                       />
                     </div>
                   </div>
@@ -644,13 +680,20 @@ function AuctionPageInner({ routeMode }: { routeMode: RouteAuctionMode }) {
             {snapshot?.status === "CLOSED" && (
               <div className="mt-4">
                 <p className="font-label text-xs text-neutral-400">
-                  Auction closed. Run Threshold decryption, then publish the
-                  winner on-chain.
+                  Auction closed. Run Threshold Network decryption, then publish
+                  the winner on-chain.
+                  {snapshot.totalBids === 0n && (
+                    <span className="mt-2 block text-amber-300/90">
+                      No bids yet — reveal will fail until at least one bid is
+                      placed.
+                    </span>
+                  )}
                 </p>
                 <div className="mt-4">
                   <RevealWinner
-                    mode={routeMode}
+                    mode={revealMode}
                     contractAddress={address}
+                    closedAt={sessionClosedAt}
                     onRevealSuccess={() => {
                       void fetchState();
                       void hydrateFeedFromLogs();
