@@ -14,8 +14,17 @@ import {
 const CLOSE_ABI = [
   "function closeBidding() external",
   "function auctioneer() view returns (address)",
+  "function buyer() view returns (address)",
   "function auctionClosed() view returns (bool)",
 ] as const;
+
+async function readCloserAddress(read: Contract): Promise<string> {
+  try {
+    return (await read.auctioneer()) as string;
+  } catch {
+    return (await read.buyer()) as string;
+  }
+}
 
 function formatCloseError(e: unknown): string {
   if (e instanceof Error) {
@@ -72,17 +81,17 @@ export default function CloseAuctionPanel({
         CLOSE_ABI,
         getReadOnlyRpcProvider(),
       ) as Contract;
-      const [onChainAuctioneer, closed] = await Promise.all([
-        read.auctioneer() as Promise<string>,
+      const [onChainCloser, closed] = await Promise.all([
+        readCloserAddress(read),
         read.auctionClosed() as Promise<boolean>,
       ]);
       if (closed) {
         setError("This auction is already closed.");
         return;
       }
-      if (onChainAuctioneer.toLowerCase() !== me) {
+      if (onChainCloser.toLowerCase() !== me) {
         setError(
-          `Only the auctioneer can close. On-chain auctioneer is ${onChainAuctioneer}; connected wallet is ${me}.`,
+          `Only the auction owner can close. On-chain owner is ${onChainCloser}; connected wallet is ${me}.`,
         );
         return;
       }

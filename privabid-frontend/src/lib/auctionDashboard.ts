@@ -109,7 +109,7 @@ async function enrichReverse(
       c.totalAsks(),
       c.auctionClosed(),
       c.winnerRevealed(),
-      c.winningVendor(),
+      c.winningSeller(),
       c.winningAsk(),
     ]);
     const tr = Number(timeRemainingSec);

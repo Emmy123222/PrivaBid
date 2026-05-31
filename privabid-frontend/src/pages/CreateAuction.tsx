@@ -123,8 +123,13 @@ export default function CreateAuction() {
       return;
     }
 
-    if (isDutchMode && (!dutchStartPrice || !dutchDecrementAmount || !dutchDecrementInterval)) {
+    if (isDutchMode && (!dutchStartPrice || !dutchDecrementInterval)) {
       setError("Please fill in all Dutch auction parameters.");
+      return;
+    }
+
+    if (isDutchMode && !factoryIsV2 && !dutchDecrementAmount) {
+      setError("Please fill in the Dutch decrement amount.");
       return;
     }
 
@@ -150,7 +155,7 @@ export default function CreateAuction() {
       const dutchFloorPriceMicro = isDutchMode 
         ? reservePriceMicro 
         : 0n;
-      const dutchDecrementBlocks = isDutchMode 
+      const dutchDecrementBlocks = isDutchMode
         ? BigInt(dutchDecrementInterval)
         : 0n;
 
@@ -408,31 +413,39 @@ export default function CreateAuction() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block font-label text-sm font-medium text-white">
-                      Decrement Amount *
-                    </label>
-                    <div className="relative mt-2">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={dutchDecrementAmount}
-                        onChange={(e) => setDutchDecrementAmount(e.target.value)}
-                        disabled={isDeploying}
-                        placeholder="0.00"
-                        className="w-full rounded-lg border border-neutral-700 bg-priva-bg px-3 py-2 pr-16 text-white outline-none ring-[#00FF94]/30 focus:ring-2 disabled:opacity-50"
-                        required
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 font-label text-sm text-neutral-400">
-                        USDC
-                      </span>
+                  {!factoryIsV2 && (
+                    <div>
+                      <label className="block font-label text-sm font-medium text-white">
+                        Decrement Amount *
+                      </label>
+                      <div className="relative mt-2">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={dutchDecrementAmount}
+                          onChange={(e) => setDutchDecrementAmount(e.target.value)}
+                          disabled={isDeploying}
+                          placeholder="0.00"
+                          className="w-full rounded-lg border border-neutral-700 bg-priva-bg px-3 py-2 pr-16 text-white outline-none ring-[#00FF94]/30 focus:ring-2 disabled:opacity-50"
+                          required
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 font-label text-sm text-neutral-400">
+                          USDC
+                        </span>
+                      </div>
+                      <p className="mt-1 font-label text-xs text-neutral-500">
+                        Standalone Dutch only (V1 factory). V2 drops 1 μUSDC per
+                        interval below.
+                      </p>
                     </div>
-                  </div>
+                  )}
 
                   <div>
                     <label className="block font-label text-sm font-medium text-white">
-                      Decrement Interval *
+                      {factoryIsV2
+                        ? "Blocks per 1 μUSDC drop *"
+                        : "Decrement Interval *"}
                     </label>
                     <div className="relative mt-2">
                       <input
@@ -450,7 +463,9 @@ export default function CreateAuction() {
                       </span>
                     </div>
                     <p className="mt-1 font-label text-xs text-neutral-500">
-                      Price decreases every N blocks (~2 seconds per block on Arbitrum)
+                      {factoryIsV2
+                        ? "PrivaBidV2 Dutch: price falls by 1 micro-USDC every N blocks (~0.25s on Arbitrum Sepolia)."
+                        : "Price decreases every N blocks (~2 seconds per block on Arbitrum)"}
                     </p>
                   </div>
                 </div>

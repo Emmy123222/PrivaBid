@@ -33,6 +33,19 @@ export default function PrivaraSettlement({
     setStatus("processing");
     setError(null);
 
+    if (!recipient || !/^0x[a-fA-F0-9]{40}$/.test(recipient)) {
+      setStatus("error");
+      setError("Invalid winner address — complete reveal before settling.");
+      return;
+    }
+
+    const amountNum = parseFloat(settleAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      setStatus("error");
+      setError("Invalid settlement amount.");
+      return;
+    }
+
     try {
       const mm = await getTrustedMetaMaskProvider();
       if (!mm) throw new Error("Connect MetaMask to settle via Privara");
@@ -59,8 +72,9 @@ export default function PrivaraSettlement({
   return (
     <div className={className}>
       <p className="font-label text-[11px] text-neutral-500">
-        Confidential settlement via Privara (@reineira-os/sdk) on encrypted
-        payment rails.
+        Confidential settlement via Privara (@reineira-os/sdk) on Arbitrum Sepolia
+        testnet. Funds escrow to the revealed winner — not enforced by the auction
+        contract.
       </p>
 
       {status === "idle" && (

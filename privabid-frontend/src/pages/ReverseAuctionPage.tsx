@@ -14,7 +14,11 @@ import MySealedAmount from "../components/MySealedAmount";
 import RevealWinner from "../components/RevealWinner";
 import { CONTRACTS } from "../config/contracts";
 import { getReadOnlyRpcProvider } from "../lib/browserProvider";
-import { REVERSE_ABI } from "../lib/privabidAbis";
+import {
+  fetchReverseAuctionSnapshot,
+  reverseReadAbi,
+  type ReverseAuctionSnapshot,
+} from "../lib/reverseAuctionLoad";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
@@ -30,17 +34,9 @@ type FeedRow = {
   totalAsksNow?: bigint;
 };
 
-type AuctionSnapshot = {
-  itemName: string;
-  timeRemainingSec: bigint;
-  totalAsks: bigint;
+type AuctionSnapshot = ReverseAuctionSnapshot & {
   status: LifecycleStatus;
   winningVendor: string;
-  winningAsk: bigint;
-  budgetCeiling: bigint;
-  auctionEndTime: bigint;
-  auctionClosed: boolean;
-  winnerRevealed: boolean;
 };
 
 function truncateAddr(a: string): string {
@@ -102,88 +98,50 @@ export default function ReverseAuctionPage() {
 
   const readProvider = useMemo(() => getReadOnlyRpcProvider(), []);
 
-  const readContract = useMemo(() => {
-    if (isZeroAddress(address)) return null;
-    return new Contract(address, REVERSE_ABI, readProvider);
-  }, [address, readProvider]);
-
   const [snapshot, setSnapshot] = useState<AuctionSnapshot | null>(null);
-  const [buyerAddr, setBuyerAddr] = useState<string | null>(null);
+  const [closerAddr, setCloserAddr] = useState<string | null>(null);
+  const [isMultiMode, setIsMultiMode] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [sessionClosedAt, setSessionClosedAt] = useState<number | null>(null);
 
   const fetchState = useCallback(async () => {
-    if (!readContract || isZeroAddress(address)) {
+    if (isZeroAddress(address)) {
       setSnapshot(null);
-      setBuyerAddr(null);
+      setCloserAddr(null);
       return;
     }
     setLoadError(null);
     try {
-      const c = readContract as Contract;
-      const [
-        itemName,
-        budgetCeiling,
-        timeRemainingSec,
-        totalAsks,
-        auctionClosed,
-        winnerRevealed,
-        winningVendor,
-        winningAsk,
-      ] = await Promise.all([
-        c.itemName(),
-        c.budgetCeiling(),
-        c.timeRemaining(),
-        c.totalAsks(),
-        c.auctionClosed(),
-        c.winnerRevealed(),
-        c.winningVendor(),
-        c.winningAsk(),
-      ]);
-      
+      const loaded = await fetchReverseAuctionSnapshot(address);
+      setIsMultiMode(loaded.isMultiMode);
+      setCloserAddr(loaded.closerAddress);
       setSnapshot({
-        itemName: itemName as string,
-        timeRemainingSec: timeRemainingSec as bigint,
-        totalAsks: totalAsks as bigint,
-        status: deriveStatus(
-          auctionClosed as boolean,
-          winnerRevealed as boolean,
-        ),
-        winningVendor: winningVendor as string,
-        winningAsk: winningAsk as bigint,
-        budgetCeiling: BigInt(budgetCeiling.toString()),
-        auctionEndTime: 0n,
-        auctionClosed: auctionClosed as boolean,
-        winnerRevealed: winnerRevealed as boolean,
+        ...loaded,
+        status: deriveStatus(loaded.auctionClosed, loaded.winnerRevealed),
+        winningVendor: loaded.winningParty,
       });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Failed to load auction");
       setSnapshot(null);
-    } finally {
-      if (readContract && !isZeroAddress(address)) {
-        try {
-          const buyer = (await (readContract as Contract).buyer()) as string;
-          setBuyerAddr(buyer);
-        } catch {
-          setBuyerAddr(null);
-        }
-      }
+      setCloserAddr(null);
     }
-  }, [address, readContract]);
+  }, [address]);
 
   const hydrateFeedFromLogs = useCallback(async () => {
-    if (!readContract || isZeroAddress(address)) return;
+    if (isZeroAddress(address)) return;
     try {
+      const abi = reverseReadAbi(isMultiMode);
+      const contract = new Contract(address, abi, readProvider);
       const latest = await readProvider.getBlockNumber();
       const from = latest > 15_000 ? latest - 15_000 : 0;
 
-      const filter = readContract.filters.AskSubmitted();
-      const logs = await readContract.queryFilter(filter, from, latest);
+      const filter = contract.filters.AskSubmitted();
+      const logs = await contract.queryFilter(filter, from, latest);
       const rows: FeedRow[] = [];
       for (const log of logs) {
-        const parsed = readContract.interface.parseLog(log);
+        const parsed = contract.interface.parseLog(log);
         if (!parsed || parsed.name !== "AskSubmitted") continue;
         const vendor = parsed.args[0] as string;
         const ts = parsed.args[1] as bigint;
@@ -207,7 +165,7 @@ export default function ReverseAuctionPage() {
     } catch {
       /* ignore log hydration errors */
     }
-  }, [address, readContract, readProvider]);
+  }, [address, isMultiMode, readProvider]);
 
   useEffect(() => {
     startTransition(() => {
@@ -422,7 +380,7 @@ export default function ReverseAuctionPage() {
               <div className="mt-4 space-y-3">
                 <CloseAuctionPanel
                   contractAddress={address}
-                  auctioneer={buyerAddr}
+                  auctioneer={closerAddr}
                   canClose={snapshot.status === "ACTIVE" && !snapshot.auctionClosed}
                   onClosed={() => {
                     setSessionClosedAt(Date.now());

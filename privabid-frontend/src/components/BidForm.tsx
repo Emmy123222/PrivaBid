@@ -177,7 +177,7 @@ export default function BidForm({
         mode === "dutch"
           ? await read.floorPrice()
           : mode === "reverse"
-            ? await read.budgetCeiling()
+            ? await read.budgetCeiling().catch(() => read.reservePrice())
             : await read.reservePrice();
       setReserveMicro(BigInt(raw.toString()));
     } catch {

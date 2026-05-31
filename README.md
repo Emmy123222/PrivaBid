@@ -12,6 +12,16 @@ PrivaBid is not a single auction contract. It is a **platform of auction primiti
 [![Network](https://img.shields.io/badge/Network-Arbitrum%20Sepolia-purple?style=flat-square)](https://sepolia.arbiscan.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
+## Repository layout
+
+| Package | Path | Purpose |
+|---------|------|---------|
+| Contracts | [`privabid-contract/`](privabid-contract/) | Solidity + Hardhat + FHE auction logic |
+| Frontend | [`privabid-frontend/`](privabid-frontend/) | React testnet demo UI |
+| SDK | [`privabid-sdk/`](privabid-sdk/) | `@privabid/sdk` for third-party integration |
+
+**Network:** Arbitrum Sepolia testnet only (`421614`) — no mainnet deployment (no funds).
+
 ---
 
 ## Table of Contents
@@ -409,7 +419,7 @@ contract PrivaBidReverse {
 }
 ```
 
-> Full annotated contracts: [`contracts/`](contracts/)
+> Full annotated contracts: [`privabid-contract/contracts/`](privabid-contract/contracts/)
 
 ### What makes this privacy-by-design:
 
@@ -478,10 +488,10 @@ Traditional sealed bids require: a trusted auctioneer, legal agreements, escrow,
 | Wave | Dates | Deliverables |
 |---|---|---|
 | **Wave 1** ✅ | Mar 21 – Mar 28 | First-price sealed-bid contract, deployed on Arbitrum Sepolia, full architecture documentation, multi-mode platform design |
-| **Wave 2** 🔨 | Mar 30 – Apr 6 | Vickrey (second-price) contract with dual encrypted value tracking, encrypted reserve price feature, ERC-20 (USDC) bid deposits, Hardhat test suite |
-| **Wave 3** 📋 | Apr 8 – May 8 | Dutch auction with encrypted thresholds, full React + TypeScript frontend, live testnet demo with wallet integration, `@cofhe/sdk` full flow |
-| **Wave 4** 📋 | May 11 – May 20 | Reverse/procurement auction (`FHE.min`), Auction Factory contract, Privara SDK integration for confidential settlement |
-| **Wave 5** 📋 | May 23 – Jun 1 | Mainnet prep, security audit of FHE access control model, PrivaBid SDK for third-party protocol integration, ecosystem outreach |
+| **Wave 2** ✅ | Mar 30 – Apr 6 | Vickrey (second-price) contract with dual encrypted value tracking, encrypted reserve price feature (V2), Hardhat test suite |
+| **Wave 3** ✅ | Apr 8 – May 8 | Dutch auction with encrypted thresholds, full React + TypeScript frontend, live testnet demo with wallet integration, `@cofhe/sdk` full flow |
+| **Wave 4** ✅ | May 11 – May 20 | Reverse/procurement auction (`FHE.min`), Auction Factory contract, Privara SDK integration for confidential settlement |
+| **Wave 5** ✅ | May 23 – Jun 1 | Mainnet prep docs (testnet-only deployment), FHE ACL security audit, `@privabid/sdk`, ecosystem outreach — **no mainnet deploy (no funds)** |
 
 ---
 
@@ -506,18 +516,43 @@ Traditional sealed bids require: a trusted auctioneer, legal agreements, escrow,
 - pnpm
 
 ### Install
+
 ```bash
-git clone https://github.com/yourusername/privabid
-cd privabid/contracts
-pnpm install
+git clone https://github.com/privabid/privabid
+cd privabid/privabid-contract
+pnpm install   # or npm install
 ```
 
 ### Run Tests (Mock FHE Environment)
+
+See [docs/TESTING.md](docs/TESTING.md). Compile always works; mock-based `npm test` requires updated cofhe-hardhat-plugin.
+
 ```bash
-pnpm test
+pnpm compile
+pnpm test      # may fail until Fhenix mock packages align with cofhe-contracts 0.1.x
 ```
 
-### Deploy to Arbitrum Sepolia
+### Frontend (testnet demo)
+
+```bash
+cd privabid-frontend
+cp .env.example .env   # optional: VITE_ARB_SEPOLIA_RPC
+npm install
+npm run dev
+```
+
+Connect MetaMask to **Arbitrum Sepolia** (chain `421614`).
+
+### PrivaBid SDK
+
+```bash
+cd privabid-sdk
+npm install && npm run build
+```
+
+See [docs/INTEGRATION.md](docs/INTEGRATION.md) for third-party protocol integration.
+
+### Deploy to Arbitrum Sepolia (testnet only)
 ```bash
 cp .env.example .env
 # Fill in PRIVATE_KEY and ARB_SEPOLIA_RPC
@@ -528,6 +563,9 @@ pnpm hardhat run scripts/deploy.ts --network arb-sepolia
 
 ## Resources
 
+- [Architecture](ARCHITECTURE.md) · [FHE Explainer](FHE_EXPLAINER.md) · [Security Audit](SECURITY_AUDIT.md)
+- [Integration Guide](docs/INTEGRATION.md) · [Deployed Addresses](docs/DEPLOYED_ADDRESSES.md)
+- [Mainnet Prep (testnet-only)](docs/MAINNET_PREP.md) · [Ecosystem Outreach](docs/ECOSYSTEM_OUTREACH.md)
 - [Fhenix Documentation](https://docs.fhenix.io)
 - [CoFHE Quick Start](https://cofhe-docs.fhenix.zone/fhe-library/introduction/quick-start)
 - [Official Auction Example](https://cofhe-docs.fhenix.zone/fhe-library/examples/auction-example)

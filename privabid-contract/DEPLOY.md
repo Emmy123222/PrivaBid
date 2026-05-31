@@ -7,9 +7,8 @@ Step-by-step guide. Follow in order.
 ## Step 1 — Install Dependencies
 
 ```bash
-cd privabid-contracts
-npm install -g pnpm   # if you don't have pnpm
-pnpm install
+cd privabid-contract
+npm install
 ```
 
 ---
@@ -139,8 +138,11 @@ This verifies all four auction modes work correctly with FHE operations.
 
 ## Deployed Contract Addresses
 
-| Network | Mode | Address | Arbiscan |
-|---|---|---|---|
-| Arbitrum Sepolia | FIRST_PRICE | `0x...` | [View]() |
+See **[docs/DEPLOYED_ADDRESSES.md](../docs/DEPLOYED_ADDRESSES.md)** for the full testnet registry.
 
-*(Update this table after each deployment)*
+| Network | Mode | Address |
+|---|---|---|
+| Arbitrum Sepolia | FIRST_PRICE | `0xCD105F5853abac7a95a1BfaF56d673E32aC1D25C` |
+| Arbitrum Sepolia | FACTORY_V2 | `0x7ED138dE78f24fEde79eB54F6DddEA38D3db2339` |
+
+*(No mainnet deployment — testnet only.)*

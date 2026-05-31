@@ -116,7 +116,7 @@ export const REVERSE_ABI = [
   "function totalAsks() view returns (uint256)",
   "function auctionClosed() view returns (bool)",
   "function winnerRevealed() view returns (bool)",
-  "function winningVendor() view returns (address)",
+  "function winningSeller() view returns (address)",
   "function winningAsk() view returns (uint64)",
   "function buyer() view returns (address)",
   "function closeBidding() external",

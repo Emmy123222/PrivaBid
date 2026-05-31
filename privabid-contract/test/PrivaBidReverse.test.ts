@@ -244,10 +244,9 @@ describe("4. Access Control", () => {
     const dummyHandle = ethers.ZeroHash;
     const dummySignature = "0x";
     
-    await expect(c.revealWinner(
-      dummyHandle, 50_000n, dummySignature,
-      dummyHandle, seller1.address, dummySignature
-    )).to.be.revertedWithCustomError(c, "AuctionNotClosed");
+    await expect(
+      c.revealWinner(50_000n, dummySignature, seller1.address, dummySignature),
+    ).to.be.revertedWithCustomError(c, "AuctionNotClosed");
   });
 
   it("rejects access to handles while auction is active", async () => {

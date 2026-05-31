@@ -6,11 +6,16 @@
 node_modules/
 .pnpm-store/
 
-# Hardhat build artifacts
-contracts/artifacts/
-contracts/cache/
-contracts/typechain-types/
-contracts/deployments/
+# Hardhat build artifacts (privabid-contract)
+privabid-contract/artifacts/
+privabid-contract/cache/
+privabid-contract/typechain-types/
+
+# Frontend build
+privabid-frontend/dist/
+
+# SDK build
+privabid-sdk/dist/
 
 # Misc
 .DS_Store

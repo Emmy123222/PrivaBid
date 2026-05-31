@@ -1,0 +1,13 @@
+{
+  "name": "privabid",
+  "private": true,
+  "description": "PrivaBid — FHE auction platform (Arbitrum Sepolia testnet only)",
+  "scripts": {
+    "compile": "npm run compile --prefix privabid-contract",
+    "test": "npm test --prefix privabid-contract",
+    "test:compile": "npm run test:compile --prefix privabid-contract",
+    "build:frontend": "npm run build --prefix privabid-frontend",
+    "build:sdk": "npm run build --prefix privabid-sdk",
+    "dev": "npm run dev --prefix privabid-frontend"
+  }
+}

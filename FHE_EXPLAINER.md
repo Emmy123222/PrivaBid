@@ -261,5 +261,5 @@ In every mode: losing values are never decryptable. Privacy is guaranteed by the
 ---
 
 *For the technical implementation details: [`ARCHITECTURE.md`](ARCHITECTURE.md)*
-*For the smart contracts: [`contracts/`](contracts/)*
+*For the smart contracts: [`privabid-contract/contracts/`](privabid-contract/contracts/)*
 *For the project overview: [`README.md`](README.md)*

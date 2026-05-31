@@ -1,8 +1,8 @@
 /** External links for marketing / landing (edit for your repo & community). */
 export const SITE_LINKS = {
-  github: "https://github.com/yourusername/privabid",
+  github: "https://github.com/privabid/privabid",
   arbiscanContract:
-    "https://sepolia.arbiscan.io/address/0x83F0D8049730e4AD6b4b4586f322c85CA9D7Ca3a",
+    "https://sepolia.arbiscan.io/address/0xCD105F5853abac7a95a1BfaF56d673E32aC1D25C",
   fhenixDocs: "https://docs.fhenix.zone",
   telegram: "https://t.me/Fhenixio",
 } as const;
@@ -10,7 +10,7 @@ export const SITE_LINKS = {
 export const GENESIS_DEPLOY = {
   name: "PrivaBid Genesis Auction #001",
   mode: "FIRST_PRICE",
-  address: "0x83F0D8049730e4AD6b4b4586f322c85CA9D7Ca3a" as const,
+  address: "0xCD105F5853abac7a95a1BfaF56d673E32aC1D25C" as const,
   network: "Arbitrum Sepolia",
-  block: 252_760_926,
+  block: 268_966_129,
 } as const;
