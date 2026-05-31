@@ -106,3 +106,4 @@ Every FHE handle has an **Access Control List**. Only listed addresses/contracts
 ---
 
 *This document satisfies Wave 5 “security audit of FHE access control model” as a structured self-assessment. It does not replace a professional audit for production mainnet.*
+##
